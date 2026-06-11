@@ -22,6 +22,11 @@ public class MessengerWebhookService {
     }
 
     public void processIncomingWebhook(JsonNode payload) {
+        if (isDirectMessagingEvent(payload)) {
+            processMessagingEvent(payload);
+            return;
+        }
+
         if (!"page".equals(payload.path("object").asText())) {
             log.warn("Ignoring unsupported Facebook webhook object: {}", payload.path("object").asText());
             return;
@@ -32,6 +37,10 @@ public class MessengerWebhookService {
                 processMessagingEvent(messagingEvent);
             }
         }
+    }
+
+    private boolean isDirectMessagingEvent(JsonNode payload) {
+        return payload.has("sender") && payload.has("message");
     }
 
     private void processMessagingEvent(JsonNode messagingEvent) {
