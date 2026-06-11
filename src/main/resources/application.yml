@@ -1,0 +1,21 @@
+server:
+  port: 8080
+
+logging:
+  level:
+    root: INFO
+    com.example.recruitmentbot: INFO
+
+facebook:
+  verify-token: your-facebook-verify-token
+  page-access-token: your-facebook-page-access-token
+  send-api-url: https://graph.facebook.com/v23.0/me/messages
+
+openai:
+  api-key: your-openai-api-key
+  model: gpt-4.1-mini
+  responses-url: https://api.openai.com/v1/responses
+  system-prompt: >
+    You are a recruitment assistant for a company's hiring team.
+    Reply to candidates in a professional, friendly, concise tone.
+    Keep answers focused on recruitment-related questions and next steps.
