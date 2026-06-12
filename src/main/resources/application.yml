@@ -5,9 +5,9 @@ server:
 
 spring:
   datasource:
-    url: ${POSTGRES_URL:jdbc:h2:mem:recruitment_bot;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH}
-    username: ${POSTGRES_USERNAME:sa}
-    password: ${POSTGRES_PASSWORD:}
+    url: jdbc:h2:mem:recruitment_bot;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    username: sa
+    password:
   jpa:
     hibernate:
       ddl-auto: validate
@@ -177,3 +177,13 @@ mock:
       java-developer: "https://drive.google.com/drive/folders/1iOoqTCbb0Ff4e_oW8wdSE7CK5aL1ALWx"
       golang-developer: "https://drive.google.com/drive/folders/1RYb2YoBdYJoHHhAsRIrcYMi0Eiucphpq"
       fullstack: "https://drive.google.com/drive/folders/1xLKK7_KEJI7LcNbB0vAmKbwtvZJxUrPQ"
+
+---
+spring:
+  config:
+    activate:
+      on-profile: postgres
+  datasource:
+    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/webhook}
+    username: ${POSTGRES_USERNAME:admin}
+    password: ${POSTGRES_PASSWORD:admin}
