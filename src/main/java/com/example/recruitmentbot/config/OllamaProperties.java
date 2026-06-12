@@ -6,6 +6,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record OllamaProperties(
         String baseUrl,
         String model,
-        String systemPrompt
+        String systemPrompt,
+        String generateApiPath,
+        String jobPostModel,
+        String jobPostPromptTemplate
 ) {
 }

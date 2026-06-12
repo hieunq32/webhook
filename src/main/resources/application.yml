@@ -1,5 +1,23 @@
 server:
+  error:
+    include-message: always
   port: 8080
+
+spring:
+  datasource:
+    url: ${POSTGRES_URL:jdbc:h2:mem:recruitment_bot;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH}
+    username: ${POSTGRES_USERNAME:sa}
+    password: ${POSTGRES_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
 
 logging:
   level:
@@ -24,12 +42,31 @@ openai:
 ollama:
   base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
   model: ${OLLAMA_MODEL:qwen2.5:3b}
+  generate-api-path: ${OLLAMA_GENERATE_API_PATH:/api/generate}
+  job-post-model: ${OLLAMA_JOB_POST_MODEL:${OLLAMA_MODEL:qwen2.5:3b}}
   system-prompt: >
     You are a recruitment assistant for a company's hiring team.
     Reply in Vietnamese when the candidate writes in Vietnamese.
     Reply in English when the candidate writes in English.
     Keep answers professional, friendly, concise, and strictly focused on recruitment topics.
     If the candidate asks outside recruitment scope, redirect them back to hiring-related questions.
+  job-post-prompt-template: |
+    Ban la recruitment copywriter cho fanpage doanh nghiep.
+    Hay viet lai du lieu tuyen dung tho thanh 1 bai dang Facebook bang tieng Viet, am ap, chuyen nghiep, de thu hut ung vien.
+    Bat buoc:
+    - Chi tra ve duy nhat noi dung bai dang cuoi cung, san sang de dang len Facebook.
+    - Khong giai thich, khong markdown fence, khong mo dau bang "Duoi day la".
+    - Co emoji phu hop.
+    - Co cac phan ro rang: gioi thieu vi tri, mo ta cong viec, yeu cau, muc luong/quyen loi, dia diem, hinh thuc lam viec, call-to-action.
+    - Neu thong tin ngan gon thi duoc phep dien dat lai cho tu nhien hon nhung khong duoc tu tao su that ngoai du lieu dau vao.
+    Du lieu dau vao:
+    Tieu de: {{title}}
+    Mo ta: {{description}}
+    Yeu cau: {{requirements}}
+    Muc luong: {{salary}}
+    Dia diem: {{location}}
+    Hinh thuc lam viec: {{workType}}
+    Trang thai: {{status}}
 
 mock:
   recruitment:
