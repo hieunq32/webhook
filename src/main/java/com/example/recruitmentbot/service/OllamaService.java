@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -24,7 +25,8 @@ public class OllamaService {
     private final RestTemplate restTemplate;
     private final OllamaProperties ollamaProperties;
 
-    public OllamaService(RestTemplate restTemplate, OllamaProperties ollamaProperties) {
+    public OllamaService(@Qualifier("ollamaRestTemplate") RestTemplate restTemplate,
+                         OllamaProperties ollamaProperties) {
         this.restTemplate = restTemplate;
         this.ollamaProperties = ollamaProperties;
     }

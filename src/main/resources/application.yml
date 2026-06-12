@@ -12,7 +12,8 @@ facebook:
   send-api-url: https://graph.facebook.com/v23.0/me/messages
 
 openai:
-  api-key: your-openai-api-key
+  mode: OLLAMA
+  api-key: ${OPENAI_API_KEY:}
   model: gpt-4.1-mini
   responses-url: https://api.openai.com/v1/responses
   system-prompt: >

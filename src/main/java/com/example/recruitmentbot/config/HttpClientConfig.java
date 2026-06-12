@@ -16,4 +16,12 @@ public class HttpClientConfig {
                 .setReadTimeout(Duration.ofSeconds(30))
                 .build();
     }
+
+    @Bean("ollamaRestTemplate")
+    public RestTemplate ollamaRestTemplate(RestTemplateBuilder builder) {
+        return builder
+                .setConnectTimeout(Duration.ofSeconds(10))
+                .setReadTimeout(Duration.ofSeconds(120))
+                .build();
+    }
 }
