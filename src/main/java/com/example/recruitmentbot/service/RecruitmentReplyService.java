@@ -1,6 +1,7 @@
 package com.example.recruitmentbot.service;
 
 import com.example.recruitmentbot.config.OpenAiProperties;
+import com.example.recruitmentbot.config.OllamaProperties;
 import com.example.recruitmentbot.config.RecruitmentMockProperties;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -28,19 +29,37 @@ public class RecruitmentReplyService {
     private static final Pattern VIETNAMESE_CHAR_PATTERN = Pattern.compile("[\\p{IsLatin}&&[^\u0000-\u007F]]");
     private static final int MIN_EXP_YEARS = 0;
     private static final int MAX_EXP_YEARS = 40;
+    private static final String ROLE_PROMPT_VI =
+            "Ban cho em biet vi tri ban muon ung (VD: Java Developer, Golang Developer, Fullstack).";
+    private static final String ROLE_PROMPT_EN =
+            "Tell me the position you want to apply for (example: Java Developer, Golang Developer, Fullstack).";
+    private static final String EXPERIENCE_PROMPT_VI =
+            "Em da nhan vi tri. Ban cho em biet so nam kinh nghiem cua ban (VD: 2 nam).";
+    private static final String EXPERIENCE_PROMPT_EN =
+            "Great! Now send your years of experience (example: 2 years).";
+    private static final String LOCATION_PROMPT_VI =
+            "De em tra cuu JD chinh xac, cho em biet khu vuc ban yeu thich (VD: Hanoi, HCM, Da Nang).";
+    private static final String LOCATION_PROMPT_EN =
+            "To match the right JD, tell me your preferred location (e.g., Hanoi, HCM, Da Nang).";
 
     private final OpenAiProperties openAiProperties;
     private final OpenAiService openAiService;
+    private final OllamaService ollamaService;
+    private final OllamaProperties ollamaProperties;
     private final RecruitmentMockProperties mockProperties;
     private final Map<String, CandidateProfile> candidateProfiles = new ConcurrentHashMap<>();
     private final Map<String, String> jdDriveLinkByRoleAlias = new ConcurrentHashMap<>();
     private final Map<String, String> jdByRoleAlias = new ConcurrentHashMap<>();
 
     public RecruitmentReplyService(OpenAiProperties openAiProperties,
-                                  OpenAiService openAiService,
-                                  RecruitmentMockProperties mockProperties) {
+                                   OpenAiService openAiService,
+                                   OllamaService ollamaService,
+                                   OllamaProperties ollamaProperties,
+                                   RecruitmentMockProperties mockProperties) {
         this.openAiProperties = openAiProperties;
         this.openAiService = openAiService;
+        this.ollamaService = ollamaService;
+        this.ollamaProperties = ollamaProperties;
         this.mockProperties = mockProperties;
         initPositionIndex();
     }
@@ -49,13 +68,65 @@ public class RecruitmentReplyService {
         if (openAiProperties.isOpenAiMode()) {
             return new RecruitmentReply(openAiService.generateRecruitmentReply(candidateMessage), null);
         }
-        return buildMockReply(candidateMessage, senderId);
+        RecruitmentReply mockReply = buildMockReply(candidateMessage, senderId);
+        if (openAiProperties.isOllamaMode() && shouldUseOllamaFallback(candidateMessage, mockReply)) {
+            log.info("Routing candidate message to Ollama fallback. senderId={}, message={}", senderId, candidateMessage);
+            return new RecruitmentReply(ollamaService.generateRecruitmentReply(buildOllamaPrompt(candidateMessage, senderId)), null);
+        }
+        return mockReply;
+    }
+
+    private String buildOllamaPrompt(String candidateMessage, String senderId) {
+        CandidateProfile profile = StringUtils.hasText(senderId) ? candidateProfiles.get(senderId) : null;
+        if (profile == null) {
+            return candidateMessage;
+        }
+
+        StringBuilder prompt = new StringBuilder(candidateMessage);
+        prompt.append("\n\nCandidate context:");
+        if (StringUtils.hasText(profile.getRole())) {
+            prompt.append("\n- role: ").append(profile.getRole());
+        }
+        if (StringUtils.hasText(profile.getExperienceYears())) {
+            prompt.append("\n- experienceYears: ").append(profile.getExperienceYears());
+        }
+        if (StringUtils.hasText(profile.getLocation())) {
+            prompt.append("\n- location: ").append(profile.getLocation());
+        }
+        prompt.append("\n- replyLanguage: ")
+                .append(isVietnamese(candidateMessage) ? "Vietnamese" : "English");
+        prompt.append("\n- scope: recruitment only");
+        if (StringUtils.hasText(ollamaProperties.systemPrompt())) {
+            prompt.append("\n- policy: follow configured recruitment assistant rules");
+        }
+        return prompt.toString();
+    }
+
+    private boolean shouldUseOllamaFallback(String candidateMessage, RecruitmentReply mockReply) {
+        if (mockReply == null || mockReply.documentUrl() != null) {
+            return false;
+        }
+
+        boolean vietnamese = isVietnamese(candidateMessage);
+        String normalizedMessage = normalizeText(candidateMessage);
+        String fallbackReply = vietnamese
+                ? safe(mockProperties.vietnameseFallbackReply())
+                : safe(mockProperties.englishFallbackReply());
+        String outOfScopeReply = vietnamese
+                ? safe(mockProperties.vietnameseReplyForOutOfScope())
+                : safe(mockProperties.englishReplyForOutOfScope());
+        String rolePrompt = vietnamese ? ROLE_PROMPT_VI : ROLE_PROMPT_EN;
+        return fallbackReply.equals(mockReply.text())
+                || outOfScopeReply.equals(mockReply.text())
+                || (rolePrompt.equals(mockReply.text()) && !hasStructuredSignal(normalizedMessage));
     }
 
     private RecruitmentReply buildMockReply(String candidateMessage, String senderId) {
         String normalizedMessage = normalizeText(candidateMessage);
         boolean vietnamese = isVietnamese(candidateMessage);
         boolean outOfScope = containsAny(normalizedMessage, toArray(mockProperties.outOfScopeKeywords()));
+        boolean recruitmentTopic = isRecruitmentTopic(normalizedMessage);
+        boolean structuredSignal = hasStructuredSignal(normalizedMessage);
 
         String fallbackReply = vietnamese
                 ? safe(mockProperties.vietnameseFallbackReply())
@@ -90,6 +161,10 @@ public class RecruitmentReplyService {
             return new RecruitmentReply(outOfScopeReply, null);
         }
 
+        if (!recruitmentTopic && !structuredSignal) {
+            return new RecruitmentReply(fallbackReply, null);
+        }
+
         CandidateProfile profile = candidateProfiles.computeIfAbsent(senderId, key -> new CandidateProfile());
 
         if (detectedRole != null) {
@@ -104,24 +179,15 @@ public class RecruitmentReplyService {
         }
 
         if (!StringUtils.hasText(profile.getRole())) {
-            return new RecruitmentReply(vietnamese
-                            ? "Ban cho em biet vi tri ban muon ung (VD: Java Developer, Golang Developer, Fullstack)."
-                            : "Tell me the position you want to apply for (example: Java Developer, Golang Developer, Fullstack).",
-                    null);
+            return new RecruitmentReply(vietnamese ? ROLE_PROMPT_VI : ROLE_PROMPT_EN, null);
         }
 
         if (!StringUtils.hasText(profile.getExperienceYears())) {
-            return new RecruitmentReply(vietnamese
-                            ? "Em da nhan vi tri. Ban cho em biet so nam kinh nghiem cua ban (VD: 2 nam)."
-                            : "Great! Now send your years of experience (example: 2 years).",
-                    null);
+            return new RecruitmentReply(vietnamese ? EXPERIENCE_PROMPT_VI : EXPERIENCE_PROMPT_EN, null);
         }
 
         if (!StringUtils.hasText(profile.getLocation())) {
-            return new RecruitmentReply(vietnamese
-                            ? "De em tra cuu JD chinh xac, cho em biet khu vuc ban yeu thich (VD: Hanoi, HCM, Da Nang)."
-                            : "To match the right JD, tell me your preferred location (e.g., Hanoi, HCM, Da Nang).",
-                    null);
+            return new RecruitmentReply(vietnamese ? LOCATION_PROMPT_VI : LOCATION_PROMPT_EN, null);
         }
 
         String roleAlias = normalizeText(profile.getRole());
@@ -226,6 +292,12 @@ public class RecruitmentReplyService {
                 || containsAny(normalizedMessage, toArray(mockProperties.contactKeywords()))
                 || containsAny(normalizedMessage, toArray(mockProperties.statusKeywords()))
                 || containsAny(normalizedMessage, "job", "jobs", "position", "positions", "apply", "resume", "candidate", "interview");
+    }
+
+    private boolean hasStructuredSignal(String normalizedMessage) {
+        return StringUtils.hasText(detectRole(normalizedMessage))
+                || StringUtils.hasText(detectExperience(normalizedMessage))
+                || StringUtils.hasText(detectLocation(normalizedMessage));
     }
 
     private boolean containsAny(String message, String... keywords) {

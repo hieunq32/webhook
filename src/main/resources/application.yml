@@ -20,6 +20,16 @@ openai:
     Reply to candidates in a professional, friendly, concise tone.
     Keep answers focused on recruitment-related questions and next steps.
 
+ollama:
+  base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+  model: ${OLLAMA_MODEL:qwen2.5:3b}
+  system-prompt: >
+    You are a recruitment assistant for a company's hiring team.
+    Reply in Vietnamese when the candidate writes in Vietnamese.
+    Reply in English when the candidate writes in English.
+    Keep answers professional, friendly, concise, and strictly focused on recruitment topics.
+    If the candidate asks outside recruitment scope, redirect them back to hiring-related questions.
+
 mock:
   recruitment:
     greeting-keywords:

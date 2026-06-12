@@ -21,4 +21,8 @@ public record OpenAiProperties(
     public boolean isOpenAiMode() {
         return "OPENAI".equalsIgnoreCase(mode);
     }
+
+    public boolean isOllamaMode() {
+        return "OLLAMA".equalsIgnoreCase(mode);
+    }
 }
