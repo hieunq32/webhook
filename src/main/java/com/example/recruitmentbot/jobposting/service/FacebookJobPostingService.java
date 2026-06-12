@@ -4,6 +4,7 @@ import com.example.recruitmentbot.jobposting.config.FacebookJobPostingProperties
 import com.example.recruitmentbot.jobposting.domain.FacebookJobPost;
 import com.example.recruitmentbot.jobposting.domain.FacebookPostStatus;
 import com.example.recruitmentbot.jobposting.domain.JobDescription;
+import com.example.recruitmentbot.jobposting.domain.WorkType;
 import com.example.recruitmentbot.jobposting.domain.JobStatus;
 import com.example.recruitmentbot.jobposting.dto.JobDescriptionUpsertRequest;
 import com.example.recruitmentbot.jobposting.dto.FacebookPostOperationResponse;
@@ -12,10 +13,14 @@ import com.example.recruitmentbot.jobposting.repository.JobDescriptionRepository
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 @Service
 public class FacebookJobPostingService {
@@ -49,6 +54,34 @@ public class FacebookJobPostingService {
     public FacebookPostOperationResponse createAndPublish(JobDescriptionUpsertRequest request) {
         JobDescription saved = jobDescriptionService.createEntity(request);
         return publish(saved.getId());
+    }
+
+    @Transactional
+    public FacebookPostOperationResponse createAndPublishFromText(String rawMessage) {
+        JobDescriptionUpsertRequest request = buildRequestFromRawText(rawMessage, JobStatus.OPEN, 0);
+        return createAndPublish(request);
+    }
+
+    @Transactional
+    public FacebookPostOperationResponse updateFromTextAndRepublish(Long jobDescriptionId, String rawMessage) {
+        JobDescription existing = jobDescriptionService.getEntity(jobDescriptionId);
+        JobDescriptionUpsertRequest request = buildRequestFromRawText(
+                rawMessage,
+                existing.getStatus(),
+                existing.getApplicantCount()
+        );
+        JobDescription updated = jobDescriptionService.updateEntity(jobDescriptionId, request);
+        if (updated.getStatus() != JobStatus.OPEN) {
+            return new FacebookPostOperationResponse(
+                    updated.getId(),
+                    false,
+                    "update-and-republish",
+                    "Only OPEN jobs can be re-posted to Facebook",
+                    null,
+                    null
+            );
+        }
+        return findActivePost(jobDescriptionId).isPresent() ? repost(jobDescriptionId) : publish(jobDescriptionId);
     }
 
     @Transactional
@@ -227,5 +260,92 @@ public class FacebookJobPostingService {
                 jobDescriptionId,
                 FacebookPostStatus.ACTIVE
         );
+    }
+
+    private JobDescriptionUpsertRequest buildRequestFromRawText(String rawMessage, JobStatus status, Integer applicantCount) {
+        if (!StringUtils.hasText(rawMessage)) {
+            throw new IllegalArgumentException("Raw job content is empty");
+        }
+
+        String title = extractSection(rawMessage, "title", "role", "position", "vi tri", "vị trí", "chuc danh", "chức danh");
+        if (!StringUtils.hasText(title)) {
+            title = pickFirstLine(rawMessage);
+        }
+
+        String requirements = extractSection(rawMessage, "requirements", "skill", "ky nang", "kỹ năng", "yeu cau", "experience", "kinh nghiem");
+        if (!StringUtils.hasText(requirements)) {
+            requirements = rawMessage;
+        }
+
+        String description = extractSection(rawMessage, "description", "mo ta", "mô tả", "công việc", "job", "task", "định nghĩa");
+        if (!StringUtils.hasText(description)) {
+            description = rawMessage;
+        }
+
+        String salary = extractSection(rawMessage, "salary", "luong", "lương", "muc luong", "mức lương", "salary range", "mucluong");
+        if (!StringUtils.hasText(salary)) {
+            salary = "Thỏa thuận";
+        }
+
+        String location = extractSection(rawMessage, "location", "dia diem", "địa điểm", "tại", "tai", "location");
+        if (!StringUtils.hasText(location)) {
+            location = "Thương lượng";
+        }
+
+        WorkType workType = extractWorkType(rawMessage);
+        return new JobDescriptionUpsertRequest(
+                title,
+                description,
+                requirements,
+                salary,
+                location,
+                workType,
+                status == null ? JobStatus.OPEN : status,
+                applicantCount == null ? 0 : applicantCount
+        );
+    }
+
+    private WorkType extractWorkType(String rawMessage) {
+        String lowered = rawMessage.toLowerCase(Locale.ROOT);
+        boolean remote = lowered.contains("remote") || lowered.contains("from home") || lowered.contains("từ xa") || lowered.contains("từxa");
+        boolean onsite = lowered.contains("onsite") || lowered.contains("on-site") || lowered.contains("văn phòng") || lowered.contains("van phong")
+                || lowered.contains("offline");
+        boolean hybrid = lowered.contains("hybrid") || lowered.contains("kết hợp") || lowered.contains("ket hop")
+                || (remote && onsite);
+        if (hybrid) {
+            return WorkType.HYBRID;
+        }
+        if (remote) {
+            return WorkType.REMOTE;
+        }
+        if (onsite) {
+            return WorkType.ONSITE;
+        }
+        return WorkType.ONSITE;
+    }
+
+    private String extractSection(String rawMessage, String... labels) {
+        for (String label : labels) {
+            Matcher matcher = Pattern.compile("(?i)(?m)^\\s*" + Pattern.quote(label) + "\\s*[:\\-]\\s*(.+)$")
+                    .matcher(rawMessage);
+            if (matcher.find()) {
+                String value = matcher.group(1);
+                if (StringUtils.hasText(value)) {
+                    return value.trim();
+                }
+            }
+        }
+        return "";
+    }
+
+    private String pickFirstLine(String rawMessage) {
+        String[] lines = rawMessage.split("\\r?\\n");
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (StringUtils.hasText(trimmed)) {
+                return trimmed;
+            }
+        }
+        return rawMessage.length() <= 80 ? rawMessage : rawMessage.substring(0, 80);
     }
 }
