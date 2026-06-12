@@ -32,6 +32,8 @@ public class OpenAiService {
     }
 
     public String generateRecruitmentReply(String candidateMessage) {
+        validateOpenAiConfiguration();
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setBearerAuth(openAiProperties.apiKey());
@@ -67,6 +69,15 @@ public class OpenAiService {
         } catch (RestClientException exception) {
             log.error("OpenAI API call failed before a response was received", exception);
             throw new IllegalStateException("OpenAI API call failed", exception);
+        }
+    }
+
+    private void validateOpenAiConfiguration() {
+        if (!StringUtils.hasText(openAiProperties.apiKey())
+                || !StringUtils.hasText(openAiProperties.model())
+                || !StringUtils.hasText(openAiProperties.responsesUrl())
+                || !StringUtils.hasText(openAiProperties.systemPrompt())) {
+            throw new IllegalStateException("OpenAI mode is enabled but OpenAI configuration is incomplete");
         }
     }
 

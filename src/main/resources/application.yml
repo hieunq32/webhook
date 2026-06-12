@@ -19,3 +19,113 @@ openai:
     You are a recruitment assistant for a company's hiring team.
     Reply to candidates in a professional, friendly, concise tone.
     Keep answers focused on recruitment-related questions and next steps.
+
+mock:
+  recruitment:
+    greeting-keywords:
+      - "hello"
+      - "hi"
+      - "hey"
+      - "xin chao"
+      - "xin chào"
+      - "chao"
+      - "chào"
+    role-keywords:
+      - "job"
+      - "jobs"
+      - "role"
+      - "roles"
+      - "position"
+      - "positions"
+      - "vacancy"
+      - "vacancies"
+      - "tuyen"
+      - "tuyển"
+      - "vi tri"
+      - "vị trí"
+      - "opportunity"
+      - "opportunities"
+    cv-keywords:
+      - "jd"
+      - "cv"
+      - "resume"
+      - "ung tuyen"
+      - "ứng tuyển"
+      - "apply"
+      - "application"
+      - "profile"
+      - "ho so"
+      - "hồ sơ"
+      - "upload cv"
+    interview-keywords:
+      - "interview"
+      - "schedule"
+      - "booking"
+      - "calendar"
+      - "lich"
+      - "lịch"
+      - "phong van"
+      - "phỏng vấn"
+      - "time"
+    salary-keywords:
+      - "salary"
+      - "luong"
+      - "lương"
+      - "benefit"
+      - "phuc loi"
+      - "phúc lợi"
+      - "compensation"
+    contact-keywords:
+      - "contact"
+      - "email"
+      - "phone"
+      - "sdt"
+      - "hotline"
+      - "zalo"
+      - "call"
+      - "lien he"
+      - "liên hệ"
+    status-keywords:
+      - "status"
+      - "result"
+      - "progress"
+      - "ket qua"
+      - "kết quả"
+      - "tien trinh"
+      - "tiến trình"
+    thanks-keywords:
+      - "thanks"
+      - "thank you"
+      - "thank"
+      - "cam on"
+      - "cảm ơn"
+    out-of-scope-keywords:
+      - "politics"
+      - "chinh tri"
+      - "chính trị"
+      - "social"
+      - "coding"
+      - "code"
+      - "java"
+      - "python"
+      - "javascript"
+      - "game"
+      - "bong da"
+      - "football"
+      - "movie"
+      - "movie"
+    vietnamese-reply-for-out-of-scope: >
+      Bot chi ho tro cac cau hoi trong linh vuc tuyen dung: vi tri, ho so ung tuyen, phuc vu phong van, luong, trang thai.
+      Ban vui long hoi cac cau hoi ve ho so va tuyen dung de duoc ho tro.
+    english-reply-for-out-of-scope: >
+      This bot only handles recruitment-related questions (roles, application, resumes, interviews, compensation, status).
+      Please ask recruiting or hiring questions.
+    vietnamese-fallback-reply: >
+      Bot chua co cau tra loi cu the cho doan van nay.
+      Ban co the cho biet vi tri, nam kinh nghiem, hoac chi tiet ho so ung tuyen de duoc ho tro.
+    english-fallback-reply: >
+      I couldn't match this question to a recruitment form. Tell me your target role, experience, or application details and I'll continue.
+    jd-drive-links:
+      java-developer: "https://drive.google.com/drive/folders/1iOoqTCbb0Ff4e_oW8wdSE7CK5aL1ALWx"
+      golang-developer: "https://drive.google.com/drive/folders/1RYb2YoBdYJoHHhAsRIrcYMi0Eiucphpq"
+      fullstack: "https://drive.google.com/drive/folders/1xLKK7_KEJI7LcNbB0vAmKbwtvZJxUrPQ"

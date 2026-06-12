@@ -7,9 +7,18 @@ import org.springframework.validation.annotation.Validated;
 @Validated
 @ConfigurationProperties(prefix = "openai")
 public record OpenAiProperties(
-        @NotBlank String apiKey,
-        @NotBlank String model,
-        @NotBlank String responsesUrl,
-        @NotBlank String systemPrompt
+        @NotBlank String mode,
+        String apiKey,
+        String model,
+        String responsesUrl,
+        String systemPrompt
 ) {
+
+    public boolean isMockMode() {
+        return "MOCK".equalsIgnoreCase(mode);
+    }
+
+    public boolean isOpenAiMode() {
+        return "OPENAI".equalsIgnoreCase(mode);
+    }
 }

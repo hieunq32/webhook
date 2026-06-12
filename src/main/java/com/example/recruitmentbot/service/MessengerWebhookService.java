@@ -13,11 +13,12 @@ public class MessengerWebhookService {
     private static final String OPENAI_UNAVAILABLE_MESSAGE =
             "Thanks for your message. I'm the recruitment assistant for this page, but I'm temporarily unavailable. Please try again shortly.";
 
-    private final OpenAiService openAiService;
+    private final RecruitmentReplyService recruitmentReplyService;
     private final FacebookMessengerService facebookMessengerService;
 
-    public MessengerWebhookService(OpenAiService openAiService, FacebookMessengerService facebookMessengerService) {
-        this.openAiService = openAiService;
+    public MessengerWebhookService(RecruitmentReplyService recruitmentReplyService,
+                                   FacebookMessengerService facebookMessengerService) {
+        this.recruitmentReplyService = recruitmentReplyService;
         this.facebookMessengerService = facebookMessengerService;
     }
 
@@ -71,14 +72,32 @@ public class MessengerWebhookService {
             log.info("Received candidate text message from senderId={}: {}", senderId, messageText);
 
             String replyText;
+            String documentUrl = null;
             try {
-                replyText = openAiService.generateRecruitmentReply(messageText);
+                RecruitmentReplyService.RecruitmentReply recruitmentReply =
+                        recruitmentReplyService.generateReply(messageText, senderId);
+                replyText = recruitmentReply.text();
+                documentUrl = recruitmentReply.documentUrl();
             } catch (Exception exception) {
-                log.error("Failed to generate OpenAI reply for senderId={}", senderId, exception);
+                log.error("Failed to generate recruitment reply for senderId={}", senderId, exception);
                 replyText = OPENAI_UNAVAILABLE_MESSAGE;
             }
 
-            facebookMessengerService.sendTextMessage(senderId, replyText);
+            try {
+                facebookMessengerService.sendTextMessage(senderId, replyText);
+            } catch (Exception exception) {
+                log.error("Failed to send text reply to senderId={}. replyText={}", senderId, replyText, exception);
+                return;
+            }
+
+            if (documentUrl != null) {
+                try {
+                    facebookMessengerService.sendDocumentMessage(senderId, documentUrl);
+                } catch (Exception exception) {
+                    log.error("Failed to send recruitment document to senderId={}. documentUrl={}",
+                            senderId, documentUrl, exception);
+                }
+            }
         } catch (Exception exception) {
             log.error("Failed to process Messenger event:\n{}", messagingEvent.toPrettyString(), exception);
         }
