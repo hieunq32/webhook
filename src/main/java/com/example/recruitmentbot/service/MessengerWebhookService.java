@@ -1,13 +1,18 @@
 package com.example.recruitmentbot.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.example.recruitmentbot.config.FacebookHrProperties;
+import com.example.recruitmentbot.hradmin.domain.PageAdminAccount;
+import com.example.recruitmentbot.hradmin.domain.PageAdminPermission;
+import com.example.recruitmentbot.hradmin.service.PageAdminAccountService;
 import com.example.recruitmentbot.jobposting.dto.FacebookPostOperationResponse;
 import com.example.recruitmentbot.jobposting.dto.JobDescriptionResponse;
 import com.example.recruitmentbot.jobposting.service.FacebookJobPostingService;
 import com.example.recruitmentbot.jobposting.service.JobDescriptionService;
+import com.fasterxml.jackson.databind.JsonNode;
+import java.text.Normalizer;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -15,9 +20,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.util.StringUtils;
 import org.springframework.stereotype.Service;
-import java.util.Locale;
+import org.springframework.util.StringUtils;
 
 @Service
 public class MessengerWebhookService {
@@ -34,20 +38,25 @@ public class MessengerWebhookService {
     private final RecruitmentReplyService recruitmentReplyService;
     private final FacebookMessengerService facebookMessengerService;
     private final FacebookHrProperties facebookHrProperties;
+    private final PageAdminAccountService pageAdminAccountService;
     private final FacebookJobPostingService facebookJobPostingService;
     private final JobDescriptionService jobDescriptionService;
     private final ExecutorService webhookExecutor = Executors.newCachedThreadPool();
     private final Map<String, Long> processedMessageIds = new ConcurrentHashMap<>();
     private final Map<String, AdminConversationState> adminConversationStates = new ConcurrentHashMap<>();
 
-    public MessengerWebhookService(RecruitmentReplyService recruitmentReplyService,
-                                   FacebookMessengerService facebookMessengerService,
-                                   FacebookHrProperties facebookHrProperties,
-                                   FacebookJobPostingService facebookJobPostingService,
-                                   JobDescriptionService jobDescriptionService) {
+    public MessengerWebhookService(
+            RecruitmentReplyService recruitmentReplyService,
+            FacebookMessengerService facebookMessengerService,
+            FacebookHrProperties facebookHrProperties,
+            PageAdminAccountService pageAdminAccountService,
+            FacebookJobPostingService facebookJobPostingService,
+            JobDescriptionService jobDescriptionService
+    ) {
         this.recruitmentReplyService = recruitmentReplyService;
         this.facebookMessengerService = facebookMessengerService;
         this.facebookHrProperties = facebookHrProperties;
+        this.pageAdminAccountService = pageAdminAccountService;
         this.facebookJobPostingService = facebookJobPostingService;
         this.jobDescriptionService = jobDescriptionService;
     }
@@ -109,8 +118,9 @@ public class MessengerWebhookService {
                 return;
             }
 
-            if (isHrAdmin(senderId)) {
-                handleAdminConversation(senderId, messageText);
+            Optional<PageAdminAccount> adminAccount = resolveAdminAccount(senderId);
+            if (adminAccount.isPresent()) {
+                handleAdminConversation(adminAccount.get(), senderId, messageText);
                 return;
             }
 
@@ -118,6 +128,20 @@ public class MessengerWebhookService {
         } catch (Exception exception) {
             log.error("Failed to process Messenger event:\n{}", messagingEvent.toPrettyString(), exception);
         }
+    }
+
+    private Optional<PageAdminAccount> resolveAdminAccount(String senderId) {
+        if (!facebookHrProperties.enabled()) {
+            return Optional.empty();
+        }
+        Optional<PageAdminAccount> adminAccount = pageAdminAccountService.findActiveBySenderId(senderId);
+        adminAccount.ifPresent(account -> log.info(
+                "Resolved page admin senderId={} role={} permissions={}",
+                senderId,
+                account.getRole(),
+                account.getPermissions()
+        ));
+        return adminAccount;
     }
 
     private void handleCandidateConversation(String senderId, String messageText) {
@@ -152,10 +176,8 @@ public class MessengerWebhookService {
         }
     }
 
-    private void handleAdminConversation(String senderId, String messageText) {
-        if (!StringUtils.hasText(messageText)) {
-            return;
-        }
+    private void handleAdminConversation(PageAdminAccount adminAccount, String senderId, String messageText) {
+        log.info("Received admin text message from senderId={} role={}: {}", senderId, adminAccount.getRole(), messageText);
 
         cleanupAdminConversations();
         AdminConversationState state = adminConversationStates.computeIfAbsent(senderId, key -> new AdminConversationState());
@@ -167,69 +189,98 @@ public class MessengerWebhookService {
 
         if (state.mode == AdminConversationMode.IDLE) {
             if (menuChoice != null) {
-                processAdminMenuChoice(senderId, state, menuChoice.option(), remainingText);
+                processAdminMenuChoice(adminAccount, senderId, state, menuChoice.option(), remainingText);
             } else {
-                sendAdminMenu(senderId, "HR mode: bạn vui lòng chọn theo menu.");
+                sendAdminMenu(adminAccount, senderId, null);
             }
             return;
         }
 
         switch (state.mode) {
-            case AWAIT_JOB_DESCRIPTION -> processJobCreationInput(senderId, state, sanitizedText);
-            case AWAIT_EDIT_JOB_ID -> processEditJobSelection(senderId, state, sanitizedText);
-            case AWAIT_JOB_UPDATE_CONTENT -> processJobUpdateContent(senderId, state, sanitizedText);
+            case AWAIT_JOB_DESCRIPTION -> processJobCreationInput(adminAccount, senderId, state, sanitizedText);
+            case AWAIT_EDIT_JOB_ID -> processEditJobSelection(adminAccount, senderId, state, sanitizedText);
+            case AWAIT_JOB_UPDATE_CONTENT -> processJobUpdateContent(adminAccount, senderId, state, sanitizedText);
             default -> {
                 state.mode = AdminConversationMode.IDLE;
-                sendAdminMenu(senderId, "Đã trở về menu chính.");
+                state.targetJobId = null;
+                sendAdminMenu(adminAccount, senderId, "Da quay ve menu chinh.");
             }
         }
     }
 
-    private void processAdminMenuChoice(String senderId, AdminConversationState state, int option, String remainder) {
+    private void processAdminMenuChoice(
+            PageAdminAccount adminAccount,
+            String senderId,
+            AdminConversationState state,
+            int option,
+            String remainder
+    ) {
         switch (option) {
             case 1 -> {
+                if (!pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.AUTO_POST_JOB)) {
+                    sendAdminMenu(adminAccount, senderId, "Tai khoan nay khong co quyen dang bai tu dong.");
+                    return;
+                }
                 state.mode = AdminConversationMode.AWAIT_JOB_DESCRIPTION;
                 if (StringUtils.hasText(remainder)) {
-                    processJobCreationInput(senderId, state, remainder);
+                    processJobCreationInput(adminAccount, senderId, state, remainder);
                 } else {
                     facebookMessengerService.sendTextMessage(senderId, buildCreatePrompt());
                 }
             }
             case 2 -> {
+                if (!pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.EDIT_JOB_POST)) {
+                    sendAdminMenu(adminAccount, senderId, "Tai khoan nay khong co quyen sua bai dang.");
+                    return;
+                }
                 state.mode = AdminConversationMode.AWAIT_EDIT_JOB_ID;
                 state.targetJobId = null;
                 if (StringUtils.hasText(remainder)) {
-                    processEditJobSelection(senderId, state, remainder);
+                    processEditJobSelection(adminAccount, senderId, state, remainder);
                 } else {
                     facebookMessengerService.sendTextMessage(senderId,
-                            "Bạn chọn Sửa bài đăng. Hãy gửi: `<jobId> <nội dung mới>` hoặc chỉ gửi `jobId` để nhập nội dung ở bước tiếp theo.");
+                            "Gui theo format: <jobId> <noi dung moi>, hoac chi gui <jobId> de nhap noi dung o buoc sau.");
                 }
             }
             case 3 -> {
+                if (!pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.VIEW_HR_SCHEDULE)) {
+                    sendAdminMenu(adminAccount, senderId, "Tai khoan nay khong co quyen xem lich.");
+                    return;
+                }
                 state.mode = AdminConversationMode.IDLE;
-                sendJobScheduleSummary(senderId);
+                sendJobScheduleSummary(adminAccount, senderId);
             }
-            default -> sendAdminMenu(senderId, "Lựa chọn không hợp lệ, hãy chọn lại.");
+            default -> sendAdminMenu(adminAccount, senderId, "Lua chon khong hop le.");
         }
     }
 
-    private void processJobCreationInput(String senderId, AdminConversationState state, String text) {
+    private void processJobCreationInput(
+            PageAdminAccount adminAccount,
+            String senderId,
+            AdminConversationState state,
+            String text
+    ) {
         if ("0".equals(text.trim())) {
             state.mode = AdminConversationMode.IDLE;
-            sendAdminMenu(senderId, "Đã huỷ thao tác. Về menu.");
+            sendAdminMenu(adminAccount, senderId, "Da huy thao tac.");
             return;
         }
 
         FacebookPostOperationResponse response = facebookJobPostingService.createAndPublishFromText(text);
         state.mode = AdminConversationMode.IDLE;
-        sendAdminFlowResponse(senderId, response);
+        sendAdminFlowResponse(adminAccount, senderId, response);
     }
 
-    private void processEditJobSelection(String senderId, AdminConversationState state, String text) {
+    private void processEditJobSelection(
+            PageAdminAccount adminAccount,
+            String senderId,
+            AdminConversationState state,
+            String text
+    ) {
         AdminJobEditRequest editRequest = parseEditRequest(text);
         if (editRequest.jobId == null) {
             facebookMessengerService.sendTextMessage(senderId,
-                    "Không xác định được jobId. Vui lòng gửi theo format: `<jobId> <nội dung mới>`.");
+                    "Khong xac dinh duoc jobId. Hay gui theo format: <jobId> <noi dung moi>.");
             return;
         }
 
@@ -237,26 +288,32 @@ public class MessengerWebhookService {
             state.mode = AdminConversationMode.AWAIT_JOB_UPDATE_CONTENT;
             state.targetJobId = editRequest.jobId;
             facebookMessengerService.sendTextMessage(senderId,
-                    "Đã nhận jobId. Gửi mô tả mới để thay thế và publish lại cho jobId=" + editRequest.jobId + ".");
+                    "Da nhan jobId=" + editRequest.jobId + ". Gui noi dung moi de thay the va dang lai.");
             return;
         }
 
         FacebookPostOperationResponse response = facebookJobPostingService
                 .updateFromTextAndRepublish(editRequest.jobId, editRequest.content);
         state.mode = AdminConversationMode.IDLE;
-        sendAdminFlowResponse(senderId, response);
+        sendAdminFlowResponse(adminAccount, senderId, response);
     }
 
-    private void processJobUpdateContent(String senderId, AdminConversationState state, String text) {
+    private void processJobUpdateContent(
+            PageAdminAccount adminAccount,
+            String senderId,
+            AdminConversationState state,
+            String text
+    ) {
         if (state.targetJobId == null) {
             state.mode = AdminConversationMode.IDLE;
-            facebookMessengerService.sendTextMessage(senderId, "Phiên chỉnh sửa không hợp lệ. Vui lòng chọn lại từ đầu.");
+            sendAdminMenu(adminAccount, senderId, "Phien sua bai khong hop le. Hay chon lai tu menu.");
             return;
         }
 
         if ("0".equals(text.trim())) {
             state.mode = AdminConversationMode.IDLE;
-            facebookMessengerService.sendTextMessage(senderId, "Đã huỷ chỉnh sửa. Về menu.");
+            state.targetJobId = null;
+            sendAdminMenu(adminAccount, senderId, "Da huy sua bai.");
             return;
         }
 
@@ -264,19 +321,19 @@ public class MessengerWebhookService {
                 .updateFromTextAndRepublish(state.targetJobId, text);
         state.mode = AdminConversationMode.IDLE;
         state.targetJobId = null;
-        sendAdminFlowResponse(senderId, response);
+        sendAdminFlowResponse(adminAccount, senderId, response);
     }
 
-    private void sendAdminFlowResponse(String senderId, FacebookPostOperationResponse response) {
+    private void sendAdminFlowResponse(PageAdminAccount adminAccount, String senderId, FacebookPostOperationResponse response) {
         StringBuilder reply = new StringBuilder();
         if (response.success()) {
-            reply.append("Hoàn tất: ").append(response.message()).append('\n');
+            reply.append("Hoan tat: ").append(response.message()).append('\n');
             reply.append("JobId: ").append(response.jobDescriptionId()).append('\n');
             if (StringUtils.hasText(response.facebookPostId())) {
                 reply.append("Facebook Post ID: ").append(response.facebookPostId()).append('\n');
             }
             if (StringUtils.hasText(response.generatedContent())) {
-                reply.append("Nội dung đăng: ").append('\n');
+                reply.append("Noi dung dang:\n");
                 String truncated = truncateText(response.generatedContent(), 900);
                 reply.append(truncated);
                 if (response.generatedContent().length() > 900) {
@@ -284,26 +341,27 @@ public class MessengerWebhookService {
                 }
             }
         } else {
-            reply.append("Không thể hoàn tất: ").append(response.message());
+            reply.append("Khong the hoan tat: ").append(response.message());
         }
         facebookMessengerService.sendTextMessage(senderId, reply.toString());
-        sendAdminMenu(senderId, "Quay về menu để tiếp tục.");
+        sendAdminMenu(adminAccount, senderId, "Quay ve menu.");
     }
 
-    private void sendJobScheduleSummary(String senderId) {
+    private void sendJobScheduleSummary(PageAdminAccount adminAccount, String senderId) {
         List<JobDescriptionResponse> jobs = jobDescriptionService.list();
         if (jobs.isEmpty()) {
-            facebookMessengerService.sendTextMessage(senderId, "Hiện chưa có job description nào.");
-            sendAdminMenu(senderId, "Bạn có thể tạo mới hoặc sửa bài.");
+            facebookMessengerService.sendTextMessage(senderId, "Hien chua co job description nao.");
+            sendAdminMenu(adminAccount, senderId, "Ban co the tao moi hoac sua bai.");
             return;
         }
 
-        StringBuilder builder = new StringBuilder("Lịch cập nhật tuyển dụng:\n");
+        StringBuilder builder = new StringBuilder("Lich cap nhat tuyen dung:\n");
         int count = 0;
         for (JobDescriptionResponse job : jobs) {
-            if (count++ >= ADMIN_JOB_LIST_LIMIT) {
+            if (count >= ADMIN_JOB_LIST_LIMIT) {
                 break;
             }
+            count++;
             String postStatus = job.activeFacebookPost() != null
                     ? "PostID=" + job.activeFacebookPost().facebookPostId()
                     : "Not posted";
@@ -319,23 +377,44 @@ public class MessengerWebhookService {
                     .append('\n');
         }
         if (jobs.size() > ADMIN_JOB_LIST_LIMIT) {
-            builder.append("... và ").append(jobs.size() - ADMIN_JOB_LIST_LIMIT)
-                    .append(" bản ghi khác. Bạn có thể hỏi kỹ theo jobId để chỉnh sửa.");
+            builder.append("... va ").append(jobs.size() - ADMIN_JOB_LIST_LIMIT)
+                    .append(" job khac.");
         }
         facebookMessengerService.sendTextMessage(senderId, builder.toString());
-        sendAdminMenu(senderId, null);
+        sendAdminMenu(adminAccount, senderId, null);
     }
 
-    private void sendAdminMenu(String senderId, String prefix) {
+    private void sendAdminMenu(PageAdminAccount adminAccount, String senderId, String prefix) {
         StringBuilder menu = new StringBuilder();
         if (StringUtils.hasText(prefix)) {
             menu.append(prefix).append('\n');
         }
-        menu.append("Menu HR:\n")
-                .append("1. Đăng bài tự động\n")
-                .append("2. Sửa bài đăng\n")
-                .append("3. Xem lịch\n")
-                .append("Nhập: 1/2/3 hoặc gõ khóa tương ứng.");
+
+        int optionCount = 0;
+        String displayName = StringUtils.hasText(adminAccount.getDisplayName())
+                ? adminAccount.getDisplayName()
+                : "HR";
+        menu.append("Menu HR - Xin chào ").append(displayName).append(":\n");
+
+        if (pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.AUTO_POST_JOB)) {
+            menu.append("1. Dang bai tu dong\n");
+            optionCount++;
+        }
+        if (pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.EDIT_JOB_POST)) {
+            menu.append("2. Sua bai dang\n");
+            optionCount++;
+        }
+        if (pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.VIEW_HR_SCHEDULE)) {
+            menu.append("3. Xem lich\n");
+            optionCount++;
+        }
+
+        if (optionCount == 0) {
+            menu.append("Tai khoan admin nay chua duoc cap quyen trong database.");
+        } else {
+            menu.append("Nhap 1/2/3 hoac go ten chuc nang.");
+        }
+
         facebookMessengerService.sendTextMessage(senderId, menu.toString());
     }
 
@@ -347,14 +426,14 @@ public class MessengerWebhookService {
             return new AdminMenuChoice(option, remaining);
         }
 
-        String normalized = messageText.toLowerCase(Locale.ROOT);
-        if (normalized.contains("đăng bài") || normalized.contains("dang bai")) {
-            return new AdminMenuChoice(1, messageText.replaceAll("(?i).*đăng bài", "").trim());
+        String normalized = normalizeText(messageText);
+        if (normalized.contains("dang bai")) {
+            return new AdminMenuChoice(1, messageText);
         }
-        if (normalized.contains("sửa bài") || normalized.contains("sua bai")) {
-            return new AdminMenuChoice(2, messageText.replaceAll("(?i).*sửa bài", "").trim());
+        if (normalized.contains("sua bai")) {
+            return new AdminMenuChoice(2, messageText);
         }
-        if (normalized.contains("xem lịch") || normalized.contains("xem lich")) {
+        if (normalized.contains("xem lich")) {
             return new AdminMenuChoice(3, "");
         }
         return null;
@@ -369,9 +448,9 @@ public class MessengerWebhookService {
             return new AdminJobEditRequest(null, null);
         }
 
-        long jobId = Long.parseLong(matcher.group(1));
+        Long jobId = Long.parseLong(matcher.group(1));
         String content = matcher.group(2);
-        return new AdminJobEditRequest(jobId, content == null || !StringUtils.hasText(content) ? null : content.trim());
+        return new AdminJobEditRequest(jobId, StringUtils.hasText(content) ? content.trim() : null);
     }
 
     private void cleanupAdminConversations() {
@@ -379,15 +458,9 @@ public class MessengerWebhookService {
         adminConversationStates.entrySet().removeIf(entry -> now - entry.getValue().lastActiveAt > ADMIN_SESSION_TTL_MILLIS);
     }
 
-    private boolean isHrAdmin(String senderId) {
-        return facebookHrProperties.enabled()
-                && StringUtils.hasText(senderId)
-                && facebookHrProperties.adminSenderIds().contains(senderId);
-    }
-
     private String buildCreatePrompt() {
-        return "Nhập mô tả tin đăng (có thể dạng tự do: vị trí, mô tả, kỹ năng, lương, địa điểm, hình thức làm việc)."
-                + " Ví dụ: `Java Developer - 2 năm exp - Node.js, Spring Boot - lương 20-30tr - Hanoi - remote`.";
+        return "Gui mo ta job tu do: vi tri, mo ta cong viec, ky nang, luong, dia diem, hinh thuc lam viec. "
+                + "Vi du: Java Developer - 2 nam exp - Spring Boot, SQL - luong 25-40tr - Ha Noi - hybrid.";
     }
 
     private String truncateText(String text, int maxLength) {
@@ -395,6 +468,11 @@ public class MessengerWebhookService {
             return text;
         }
         return text.substring(0, maxLength);
+    }
+
+    private String normalizeText(String input) {
+        String normalized = Normalizer.normalize(input == null ? "" : input, Normalizer.Form.NFD);
+        return normalized.replaceAll("\\p{M}", "").toLowerCase().trim();
     }
 
     private boolean isDuplicateMessage(String messageId) {
