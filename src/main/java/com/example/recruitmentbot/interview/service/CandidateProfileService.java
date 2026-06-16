@@ -4,6 +4,7 @@ import com.example.recruitmentbot.interview.config.InterviewSchedulingProperties
 import com.example.recruitmentbot.interview.domain.CandidateProfile;
 import com.example.recruitmentbot.interview.dto.InterviewSchedulingStartRequest;
 import com.example.recruitmentbot.interview.repository.CandidateProfileRepository;
+import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -29,6 +30,7 @@ public class CandidateProfileService {
         profile.setAppliedPosition(request.appliedPosition());
         profile.setDepartment(StringUtils.hasText(request.department()) ? request.department().trim() : properties.defaultDepartment());
         profile.setCvScore(request.cvScore());
+        profile.setJobDescriptionId(request.jobDescriptionId());
         profile.setPassCv(request.passCv());
         profile.setAssignedHrSenderId(
                 StringUtils.hasText(request.assignedHrSenderId())
@@ -40,6 +42,14 @@ public class CandidateProfileService {
 
     public CandidateProfile getPassedCandidateBySenderId(String senderId) {
         return candidateProfileRepository.findBySenderIdAndPassCvTrue(senderId).orElse(null);
+    }
+
+    public List<CandidateProfile> getAllPassedCandidates() {
+        return candidateProfileRepository.findAllByPassCvTrueOrderByUpdatedAtAsc();
+    }
+
+    public List<CandidateProfile> getAllNotPassedCandidates() {
+        return candidateProfileRepository.findAllByPassCvFalseOrderByUpdatedAtAsc();
     }
 
     public CandidateProfile ensureProfileExistsForMessengerSender(String senderId) {

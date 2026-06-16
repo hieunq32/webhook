@@ -20,6 +20,16 @@ public interface InterviewSlotRepository extends JpaRepository<InterviewSlot, Lo
     @Query("""
             select slot
             from InterviewSlot slot
+            where slot.department = :department
+              and slot.startTime >= :fromTime and slot.startTime < :toTime
+            order by slot.startTime asc
+            """)
+    List<InterviewSlot> findUpcomingForUpdateByDepartment(String department, OffsetDateTime fromTime, OffsetDateTime toTime);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select slot
+            from InterviewSlot slot
             where slot.startTime >= :fromTime and slot.startTime < :toTime
             order by slot.startTime asc
             """)

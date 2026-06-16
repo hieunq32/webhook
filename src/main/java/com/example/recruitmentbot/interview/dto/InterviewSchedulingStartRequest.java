@@ -12,6 +12,7 @@ public record InterviewSchedulingStartRequest(
         @NotNull @DecimalMin("0.0") BigDecimal cvScore,
         boolean passCv,
         String department,
-        String assignedHrSenderId
+        String assignedHrSenderId,
+        Long jobDescriptionId
 ) {
 }

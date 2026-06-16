@@ -34,6 +34,9 @@ public class CandidateProfile {
     @Column(nullable = false, precision = 6, scale = 2)
     private BigDecimal cvScore;
 
+    @Column
+    private Long jobDescriptionId;
+
     @Column(nullable = false)
     private boolean passCv;
 
@@ -90,6 +93,14 @@ public class CandidateProfile {
         this.cvScore = cvScore;
     }
 
+    public Long getJobDescriptionId() {
+        return jobDescriptionId;
+    }
+
+    public void setJobDescriptionId(Long jobDescriptionId) {
+        this.jobDescriptionId = jobDescriptionId;
+    }
+
     public boolean isPassCv() {
         return passCv;
     }
@@ -104,6 +115,14 @@ public class CandidateProfile {
 
     public void setAssignedHrSenderId(String assignedHrSenderId) {
         this.assignedHrSenderId = assignedHrSenderId;
+    }
+
+    public OffsetDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public OffsetDateTime getUpdatedAt() {
+        return updatedAt;
     }
 
     @PrePersist

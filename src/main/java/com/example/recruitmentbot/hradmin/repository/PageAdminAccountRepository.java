@@ -9,5 +9,7 @@ public interface PageAdminAccountRepository extends JpaRepository<PageAdminAccou
 
     Optional<PageAdminAccount> findFirstBySenderIdAndActiveTrue(String senderId);
 
+    List<PageAdminAccount> findAllByActiveTrue();
+
     List<PageAdminAccount> findAllByOrderByCreatedAtDesc();
 }

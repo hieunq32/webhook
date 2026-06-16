@@ -34,6 +34,15 @@ public class PageAdminAccountService {
     }
 
     @Transactional(readOnly = true)
+    public List<PageAdminAccount> findActiveHrAccounts() {
+        return pageAdminAccountRepository.findAllByActiveTrue().stream()
+                .filter(account -> account.getRole() == PageAdminRole.SUPER_ADMIN
+                        || account.getRole() == PageAdminRole.HR_MANAGER
+                        || account.getRole() == PageAdminRole.RECRUITER)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public boolean hasPermission(PageAdminAccount account, PageAdminPermission permission) {
         return account != null
                 && account.isActive()
@@ -90,7 +99,12 @@ public class PageAdminAccountService {
             case SUPER_ADMIN, HR_MANAGER, RECRUITER -> EnumSet.of(
                     PageAdminPermission.AUTO_POST_JOB,
                     PageAdminPermission.EDIT_JOB_POST,
-                    PageAdminPermission.VIEW_HR_SCHEDULE
+                    PageAdminPermission.VIEW_HR_SCHEDULE,
+                    PageAdminPermission.VIEW_COUNCIL_REQUESTS
+            );
+            case COUNCIL -> EnumSet.of(
+                    PageAdminPermission.VIEW_COUNCIL_SCHEDULE,
+                    PageAdminPermission.CREATE_HIRING_REQUEST
             );
             case VIEWER -> EnumSet.of(PageAdminPermission.VIEW_HR_SCHEDULE);
         };

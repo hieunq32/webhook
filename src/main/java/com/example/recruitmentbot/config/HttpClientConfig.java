@@ -21,7 +21,7 @@ public class HttpClientConfig {
     public RestTemplate ollamaRestTemplate(RestTemplateBuilder builder) {
         return builder
                 .setConnectTimeout(Duration.ofSeconds(10))
-                .setReadTimeout(Duration.ofSeconds(120))
+                .setReadTimeout(Duration.ofSeconds(20))
                 .build();
     }
 }

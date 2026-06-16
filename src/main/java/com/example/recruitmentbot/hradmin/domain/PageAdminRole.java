@@ -4,5 +4,6 @@ public enum PageAdminRole {
     SUPER_ADMIN,
     HR_MANAGER,
     RECRUITER,
+    COUNCIL,
     VIEWER
 }

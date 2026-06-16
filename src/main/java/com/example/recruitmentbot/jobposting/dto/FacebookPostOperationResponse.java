@@ -6,6 +6,7 @@ public record FacebookPostOperationResponse(
         String action,
         String message,
         String facebookPostId,
-        String generatedContent
+        String generatedContent,
+        String councilSummary
 ) {
 }

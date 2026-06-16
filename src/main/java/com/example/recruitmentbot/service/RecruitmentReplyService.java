@@ -68,10 +68,20 @@ public class RecruitmentReplyService {
         if (openAiProperties.isOpenAiMode()) {
             return new RecruitmentReply(openAiService.generateRecruitmentReply(candidateMessage), null);
         }
+        String normalizedMessage = normalizeText(candidateMessage);
+        boolean vietnamese = isVietnamese(candidateMessage);
+        if (isLikelyGreeting(normalizedMessage)) {
+            return buildGreetingReply(vietnamese);
+        }
         RecruitmentReply mockReply = buildMockReply(candidateMessage, senderId);
         if (openAiProperties.isOllamaMode() && shouldUseOllamaFallback(candidateMessage, mockReply)) {
             log.info("Routing candidate message to Ollama fallback. senderId={}, message={}", senderId, candidateMessage);
-            return new RecruitmentReply(ollamaService.generateRecruitmentReply(buildOllamaPrompt(candidateMessage, senderId)), null);
+            try {
+                return new RecruitmentReply(ollamaService.generateRecruitmentReply(buildOllamaPrompt(candidateMessage, senderId)), null);
+            } catch (Exception exception) {
+                log.warn("Ollama fallback failed for senderId={}. Returning mock reply instead.", senderId, exception);
+                return mockReply;
+            }
         }
         return mockReply;
     }
@@ -109,16 +119,25 @@ public class RecruitmentReplyService {
 
         boolean vietnamese = isVietnamese(candidateMessage);
         String normalizedMessage = normalizeText(candidateMessage);
+        boolean recruitmentTopic = isRecruitmentTopic(normalizedMessage);
+        boolean structuredSignal = hasStructuredSignal(normalizedMessage);
         String fallbackReply = vietnamese
                 ? safe(mockProperties.vietnameseFallbackReply())
                 : safe(mockProperties.englishFallbackReply());
         String outOfScopeReply = vietnamese
                 ? safe(mockProperties.vietnameseReplyForOutOfScope())
                 : safe(mockProperties.englishReplyForOutOfScope());
-        String rolePrompt = vietnamese ? ROLE_PROMPT_VI : ROLE_PROMPT_EN;
-        return fallbackReply.equals(mockReply.text())
-                || outOfScopeReply.equals(mockReply.text())
-                || (rolePrompt.equals(mockReply.text()) && !hasStructuredSignal(normalizedMessage));
+
+        if (isLikelyGreeting(normalizedMessage)) {
+            return false;
+        }
+        if (!recruitmentTopic && !structuredSignal) {
+            return false;
+        }
+        if (outOfScopeReply.equals(mockReply.text())) {
+            return false;
+        }
+        return fallbackReply.equals(mockReply.text());
     }
 
     private RecruitmentReply buildMockReply(String candidateMessage, String senderId) {
@@ -135,19 +154,18 @@ public class RecruitmentReplyService {
                 ? safe(mockProperties.vietnameseReplyForOutOfScope())
                 : safe(mockProperties.englishReplyForOutOfScope());
 
-        if (containsAny(normalizedMessage, toArray(mockProperties.greetingKeywords()))) {
-            return new RecruitmentReply(vietnamese
-                            ? "Xin chao! Minh la bot tuyen dung. Ban hay cho em biet vi tri ban muon ung va kinh nghiem ban co bao nhieu nam."
-                            : "Hi! I'm recruitment bot. Share your target position and years of experience.",
-                    null);
+        if (containsAny(normalizedMessage, toArray(mockProperties.greetingKeywords())) || isLikelyGreeting(normalizedMessage)) {
+            return buildGreetingReply(vietnamese);
         }
 
         if (!StringUtils.hasText(senderId)) {
             return new RecruitmentReply(fallbackReply, null);
         }
 
+        CandidateProfile profile = candidateProfiles.computeIfAbsent(senderId, key -> new CandidateProfile());
+
         String detectedRole = detectRole(normalizedMessage);
-        String detectedExperience = detectExperience(normalizedMessage);
+        String detectedExperience = detectExperience(normalizedMessage, profile);
         String detectedLocation = detectLocation(normalizedMessage);
 
         if (containsAny(normalizedMessage, toArray(mockProperties.thanksKeywords()))) {
@@ -164,8 +182,6 @@ public class RecruitmentReplyService {
         if (!recruitmentTopic && !structuredSignal) {
             return new RecruitmentReply(fallbackReply, null);
         }
-
-        CandidateProfile profile = candidateProfiles.computeIfAbsent(senderId, key -> new CandidateProfile());
 
         if (detectedRole != null) {
             profile.setRole(detectedRole);
@@ -243,7 +259,7 @@ public class RecruitmentReplyService {
         return findBestRoleAliasMatch(normalizedMessage);
     }
 
-    private String detectExperience(String normalizedMessage) {
+    private String detectExperience(String normalizedMessage, CandidateProfile profile) {
         Matcher matcher = EXPERIENCE_PATTERN.matcher(normalizedMessage);
         if (matcher.find()) {
             int years = Integer.parseInt(matcher.group(1));
@@ -251,7 +267,75 @@ public class RecruitmentReplyService {
                 return String.valueOf(years);
             }
         }
+
+        String[] tokens = normalizedMessage.split("\\s+");
+        boolean hasExperienceContext = containsAny(
+                normalizedMessage,
+                "kinh nghiem", "experience", "exp", "year", "years", "nam"
+        );
+        boolean expectingExperience = isExpectingExperience(profile);
+
+        for (int index = 0; index < tokens.length; index++) {
+            Integer years = parseExperienceNumber(tokens[index]);
+            if (years == null || years < MIN_EXP_YEARS || years > MAX_EXP_YEARS) {
+                continue;
+            }
+
+            String previous = index > 0 ? tokens[index - 1] : "";
+            String next = index + 1 < tokens.length ? tokens[index + 1] : "";
+            if (isExperienceUnit(previous)
+                    || isExperienceUnit(next)
+                    || hasExperienceContext
+                    || expectingExperience) {
+                return String.valueOf(years);
+            }
+        }
         return null;
+    }
+
+    private String detectExperience(String normalizedMessage) {
+        return detectExperience(normalizedMessage, null);
+    }
+
+    private boolean isExpectingExperience(CandidateProfile profile) {
+        return profile != null
+                && StringUtils.hasText(profile.getRole())
+                && !StringUtils.hasText(profile.getExperienceYears());
+    }
+
+    private boolean isExperienceUnit(String token) {
+        return "nam".equals(token)
+                || "year".equals(token)
+                || "years".equals(token)
+                || "yr".equals(token)
+                || "yrs".equals(token)
+                || "exp".equals(token);
+    }
+
+    private Integer parseExperienceNumber(String token) {
+        if (!StringUtils.hasText(token)) {
+            return null;
+        }
+
+        if (token.matches("\\d{1,2}")) {
+            return Integer.parseInt(token);
+        }
+
+        return switch (token) {
+            case "khong", "zero" -> 0;
+            case "mot", "one" -> 1;
+            case "hai", "two" -> 2;
+            case "ba", "three" -> 3;
+            case "bon", "tu", "four" -> 4;
+            case "sau", "six" -> 6;
+            case "bay", "seven" -> 7;
+            case "tam", "eight" -> 8;
+            case "chin", "nine" -> 9;
+            case "muoi", "ten" -> 10;
+            case "muoi mot", "eleven" -> 11;
+            case "muoi hai", "twelve" -> 12;
+            default -> null;
+        };
     }
 
     private String detectLocation(String normalizedMessage) {
@@ -312,6 +396,32 @@ public class RecruitmentReplyService {
             }
         }
         return false;
+    }
+
+    private boolean isLikelyGreeting(String normalizedMessage) {
+        if (!StringUtils.hasText(normalizedMessage)) {
+            return false;
+        }
+        return normalizedMessage.startsWith("xin ch")
+                || normalizedMessage.equals("chao")
+                || normalizedMessage.startsWith("chao ")
+                || normalizedMessage.equals("hello")
+                || normalizedMessage.startsWith("hello ")
+                || normalizedMessage.equals("hi")
+                || normalizedMessage.startsWith("hi ")
+                || normalizedMessage.equals("hey")
+                || normalizedMessage.startsWith("hey ")
+                || normalizedMessage.equals("alo")
+                || normalizedMessage.startsWith("alo ");
+    }
+
+    private RecruitmentReply buildGreetingReply(boolean vietnamese) {
+        return new RecruitmentReply(
+                vietnamese
+                        ? "Xin chao! Minh la bot tuyen dung. Ban hay cho em biet vi tri ban muon ung va kinh nghiem ban co bao nhieu nam."
+                        : "Hi! I'm recruitment bot. Share your target position and years of experience.",
+                null
+        );
     }
 
     private String[] toArray(List<String> values) {

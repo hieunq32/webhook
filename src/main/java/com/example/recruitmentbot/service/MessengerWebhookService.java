@@ -1,8 +1,11 @@
 package com.example.recruitmentbot.service;
 
 import com.example.recruitmentbot.config.FacebookHrProperties;
+import com.example.recruitmentbot.council.domain.CouncilHiringRequest;
+import com.example.recruitmentbot.council.service.RecruitmentCouncilService;
 import com.example.recruitmentbot.hradmin.domain.PageAdminAccount;
 import com.example.recruitmentbot.hradmin.domain.PageAdminPermission;
+import com.example.recruitmentbot.hradmin.domain.PageAdminRole;
 import com.example.recruitmentbot.hradmin.service.PageAdminAccountService;
 import com.example.recruitmentbot.interview.service.CandidateProfileService;
 import com.example.recruitmentbot.interview.service.InterviewSchedulingService;
@@ -10,6 +13,7 @@ import com.example.recruitmentbot.jobposting.dto.FacebookPostOperationResponse;
 import com.example.recruitmentbot.jobposting.service.FacebookJobPostingService;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.text.Normalizer;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -32,7 +36,7 @@ public class MessengerWebhookService {
     private static final long MESSAGE_DEDUP_TTL_MILLIS = 10 * 60 * 1000L;
     private static final long ADMIN_SESSION_TTL_MILLIS = 10 * 60 * 1000L;
     private static final int ADMIN_JOB_LIST_LIMIT = 8;
-    private static final Pattern MENU_PREFIX_PATTERN = Pattern.compile("^\\s*([1-3])[\\s\\.:,-]*(.*)$");
+    private static final Pattern MENU_PREFIX_PATTERN = Pattern.compile("^\\s*([1-4])[\\s\\.:,-]*(.*)$");
     private static final Pattern SUBMENU_PREFIX_PATTERN = Pattern.compile("^\\s*([1-2])[\\s\\.:,-]*(.*)$");
     private static final Pattern JOB_ID_PREFIX_PATTERN = Pattern.compile("^\\s*(\\d+)\\s*(.*)$");
 
@@ -43,6 +47,7 @@ public class MessengerWebhookService {
     private final CandidateProfileService candidateProfileService;
     private final FacebookJobPostingService facebookJobPostingService;
     private final InterviewSchedulingService interviewSchedulingService;
+    private final RecruitmentCouncilService recruitmentCouncilService;
     private final ExecutorService webhookExecutor = Executors.newCachedThreadPool();
     private final Map<String, Long> processedMessageIds = new ConcurrentHashMap<>();
     private final Map<String, AdminConversationState> adminConversationStates = new ConcurrentHashMap<>();
@@ -54,7 +59,8 @@ public class MessengerWebhookService {
             PageAdminAccountService pageAdminAccountService,
             CandidateProfileService candidateProfileService,
             FacebookJobPostingService facebookJobPostingService,
-            InterviewSchedulingService interviewSchedulingService
+            InterviewSchedulingService interviewSchedulingService,
+            RecruitmentCouncilService recruitmentCouncilService
     ) {
         this.recruitmentReplyService = recruitmentReplyService;
         this.facebookMessengerService = facebookMessengerService;
@@ -63,6 +69,7 @@ public class MessengerWebhookService {
         this.candidateProfileService = candidateProfileService;
         this.facebookJobPostingService = facebookJobPostingService;
         this.interviewSchedulingService = interviewSchedulingService;
+        this.recruitmentCouncilService = recruitmentCouncilService;
     }
 
     public void processIncomingWebhook(JsonNode payload) {
@@ -134,12 +141,16 @@ public class MessengerWebhookService {
 
             candidateProfileService.ensureProfileExistsForMessengerSender(senderId);
 
-            if (interviewSchedulingService.handleCandidateReplyIfApplicable(senderId, messageText)) {
-                return;
-            }
+            try {
+                if (interviewSchedulingService.handleCandidateReplyIfApplicable(senderId, messageText)) {
+                    return;
+                }
 
-            if (interviewSchedulingService.autoStartSchedulingForPassedCandidateIfNeeded(senderId)) {
-                return;
+                if (interviewSchedulingService.autoStartSchedulingForPassedCandidateIfNeeded(senderId)) {
+                    return;
+                }
+            } catch (Exception exception) {
+                log.error("Interview scheduling flow failed for senderId={}. Falling back to recruitment chat.", senderId, exception);
             }
 
             handleCandidateConversation(senderId, messageText);
@@ -172,8 +183,17 @@ public class MessengerWebhookService {
                     recruitmentReplyService.generateReply(messageText, senderId);
             replyText = recruitmentReply.text();
             documentUrl = recruitmentReply.documentUrl();
+            log.info("Generated recruitment reply for senderId={}, textLength={}, hasDocument={}",
+                    senderId,
+                    replyText == null ? 0 : replyText.length(),
+                    documentUrl != null);
         } catch (Exception exception) {
             log.error("Failed to generate recruitment reply for senderId={}", senderId, exception);
+            replyText = OPENAI_UNAVAILABLE_MESSAGE;
+        }
+
+        if (!StringUtils.hasText(replyText)) {
+            log.warn("Generated empty recruitment reply for senderId={}. Falling back to unavailable message.", senderId);
             replyText = OPENAI_UNAVAILABLE_MESSAGE;
         }
 
@@ -202,6 +222,18 @@ public class MessengerWebhookService {
         state.touch();
 
         String sanitizedText = messageText.trim();
+        if (interviewSchedulingService.handleHrReplyIfApplicable(senderId, sanitizedText)) {
+            state.mode = AdminConversationMode.IDLE;
+            state.targetJobId = null;
+            state.targetSlotId = null;
+            return;
+        }
+
+        if (adminAccount.getRole() == PageAdminRole.COUNCIL) {
+            handleCouncilConversation(adminAccount, senderId, state, sanitizedText);
+            return;
+        }
+
         AdminMenuChoice menuChoice = parseMenuChoice(sanitizedText);
         String remainingText = menuChoice == null ? sanitizedText : menuChoice.remainder();
 
@@ -214,6 +246,15 @@ public class MessengerWebhookService {
             return;
         }
 
+        AdminMenuChoice intentMenuChoice = parseIntentMenuChoice(sanitizedText);
+        if (intentMenuChoice != null) {
+            state.mode = AdminConversationMode.IDLE;
+            state.targetJobId = null;
+            state.targetSlotId = null;
+            processAdminMenuChoice(adminAccount, senderId, state, intentMenuChoice.option(), intentMenuChoice.remainder());
+            return;
+        }
+
         switch (state.mode) {
             case AWAIT_JOB_DESCRIPTION -> processJobCreationInput(adminAccount, senderId, state, sanitizedText);
             case AWAIT_EDIT_JOB_ID -> processEditJobSelection(adminAccount, senderId, state, sanitizedText);
@@ -222,6 +263,7 @@ public class MessengerWebhookService {
             case AWAIT_SCHEDULE_DETAIL_SLOT_ID -> processScheduleDetailRequest(adminAccount, senderId, state, sanitizedText);
             case AWAIT_SCHEDULE_EDIT_SLOT_ID -> processScheduleEditSelection(adminAccount, senderId, state, sanitizedText);
             case AWAIT_SCHEDULE_EDIT_REASON -> processScheduleEditReason(adminAccount, senderId, state, sanitizedText);
+            case AWAIT_COUNCIL_HIRING_REQUEST -> processCouncilHiringRequest(adminAccount, senderId, state, sanitizedText);
             default -> {
                 state.mode = AdminConversationMode.IDLE;
                 state.targetJobId = null;
@@ -273,7 +315,56 @@ public class MessengerWebhookService {
                 state.mode = AdminConversationMode.SCHEDULE_MENU;
                 sendJobScheduleSummary(adminAccount, senderId);
             }
+            case 4 -> {
+                if (!pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.VIEW_COUNCIL_REQUESTS)) {
+                    sendAdminMenu(adminAccount, senderId, "Tai khoan nay khong co quyen xem request tu Hoi dong.");
+                    return;
+                }
+                state.mode = AdminConversationMode.IDLE;
+                facebookMessengerService.sendTextMessage(senderId, recruitmentCouncilService.buildPendingHiringRequestsSummary());
+                sendAdminMenu(adminAccount, senderId, "Quay ve menu.");
+            }
             default -> sendAdminMenu(adminAccount, senderId, "Lua chon khong hop le.");
+        }
+    }
+
+    private void handleCouncilConversation(
+            PageAdminAccount councilAccount,
+            String senderId,
+            AdminConversationState state,
+            String sanitizedText
+    ) {
+        if (state.mode == AdminConversationMode.AWAIT_COUNCIL_HIRING_REQUEST) {
+            processCouncilHiringRequest(councilAccount, senderId, state, sanitizedText);
+            return;
+        }
+
+        CouncilMenuChoice choice = parseCouncilMenuChoice(sanitizedText);
+        if (choice == null) {
+            sendCouncilMenu(councilAccount, senderId, null);
+            return;
+        }
+
+        if (choice.option() == 1) {
+            if (!pageAdminAccountService.hasPermission(councilAccount, PageAdminPermission.VIEW_COUNCIL_SCHEDULE)) {
+                sendCouncilMenu(councilAccount, senderId, "Tai khoan nay khong co quyen xem lich Hoi dong.");
+                return;
+            }
+            facebookMessengerService.sendTextMessage(senderId, interviewSchedulingService.buildCouncilConfirmedSchedule(senderId));
+            sendCouncilMenu(councilAccount, senderId, null);
+            return;
+        }
+
+        if (!pageAdminAccountService.hasPermission(councilAccount, PageAdminPermission.CREATE_HIRING_REQUEST)) {
+            sendCouncilMenu(councilAccount, senderId, "Tai khoan nay khong co quyen gui request tuyen thanh vien.");
+            return;
+        }
+        state.mode = AdminConversationMode.AWAIT_COUNCIL_HIRING_REQUEST;
+        if (StringUtils.hasText(choice.remainder())) {
+            processCouncilHiringRequest(councilAccount, senderId, state, choice.remainder());
+        } else {
+            facebookMessengerService.sendTextMessage(senderId,
+                    "Hay mo ta vi tri can tuyen: vi tri, ky nang, kinh nghiem, muc luong, dia diem, hinh thuc lam viec.");
         }
     }
 
@@ -289,7 +380,7 @@ public class MessengerWebhookService {
             return;
         }
 
-        FacebookPostOperationResponse response = facebookJobPostingService.createAndPublishFromText(text);
+        FacebookPostOperationResponse response = facebookJobPostingService.createAndPublishFromText(text, adminAccount);
         state.mode = AdminConversationMode.IDLE;
         sendAdminFlowResponse(adminAccount, senderId, response);
     }
@@ -316,7 +407,7 @@ public class MessengerWebhookService {
         }
 
         FacebookPostOperationResponse response = facebookJobPostingService
-                .updateFromTextAndRepublish(editRequest.jobId, editRequest.content);
+                .updateFromTextAndRepublish(editRequest.jobId, editRequest.content, adminAccount);
         state.mode = AdminConversationMode.IDLE;
         sendAdminFlowResponse(adminAccount, senderId, response);
     }
@@ -341,7 +432,7 @@ public class MessengerWebhookService {
         }
 
         FacebookPostOperationResponse response = facebookJobPostingService
-                .updateFromTextAndRepublish(state.targetJobId, text);
+                .updateFromTextAndRepublish(state.targetJobId, text, adminAccount);
         state.mode = AdminConversationMode.IDLE;
         state.targetJobId = null;
         sendAdminFlowResponse(adminAccount, senderId, response);
@@ -354,6 +445,9 @@ public class MessengerWebhookService {
             reply.append("JobId: ").append(response.jobDescriptionId()).append('\n');
             if (StringUtils.hasText(response.facebookPostId())) {
                 reply.append("Facebook Post ID: ").append(response.facebookPostId()).append('\n');
+            }
+            if (StringUtils.hasText(response.councilSummary())) {
+                reply.append(response.councilSummary()).append('\n');
             }
             if (StringUtils.hasText(response.generatedContent())) {
                 reply.append("Noi dung dang:\n");
@@ -512,13 +606,32 @@ public class MessengerWebhookService {
             menu.append("3. Xem lich\n");
             optionCount++;
         }
+        if (pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.VIEW_COUNCIL_REQUESTS)) {
+            menu.append("4. Request tu Hoi dong\n");
+            optionCount++;
+        }
 
         if (optionCount == 0) {
             menu.append("Tai khoan admin nay chua duoc cap quyen trong database.");
         } else {
-            menu.append("Nhap 1/2/3 hoac go ten chuc nang.");
+            menu.append("Nhap 1/2/3/4 hoac go ten chuc nang.");
         }
 
+        facebookMessengerService.sendTextMessage(senderId, menu.toString());
+    }
+
+    private void sendCouncilMenu(PageAdminAccount councilAccount, String senderId, String prefix) {
+        StringBuilder menu = new StringBuilder();
+        if (StringUtils.hasText(prefix)) {
+            menu.append(prefix).append('\n');
+        }
+        String displayName = StringUtils.hasText(councilAccount.getDisplayName())
+                ? councilAccount.getDisplayName()
+                : "Hoi dong";
+        menu.append("Menu Hoi dong - Xin chao ").append(displayName).append(":\n")
+                .append("1. Xem lich\n")
+                .append("2. Tuyen thanh vien\n")
+                .append("Nhap 1/2 hoac go ten chuc nang.");
         facebookMessengerService.sendTextMessage(senderId, menu.toString());
     }
 
@@ -530,17 +643,131 @@ public class MessengerWebhookService {
             return new AdminMenuChoice(option, remaining);
         }
 
+        return parseIntentMenuChoice(messageText);
+    }
+
+    private AdminMenuChoice parseIntentMenuChoice(String messageText) {
         String normalized = normalizeText(messageText);
-        if (normalized.contains("dang bai")) {
-            return new AdminMenuChoice(1, messageText);
+        if (isAutoPostIntent(normalized)) {
+            if (matchesIntent(normalized, "dang bai")) {
+                return new AdminMenuChoice(1, stripLeadingWords(messageText, 2));
+            }
+            if (matchesIntent(normalized, "dang tin")) {
+                return new AdminMenuChoice(1, stripLeadingWords(messageText, 2));
+            }
+            if (matchesIntent(normalized, "tao bai dang")) {
+                return new AdminMenuChoice(1, stripLeadingWords(messageText, 3));
+            }
+            if (matchesIntent(normalized, "tao post")) {
+                return new AdminMenuChoice(1, stripLeadingWords(messageText, 2));
+            }
+            return new AdminMenuChoice(1, "");
         }
-        if (normalized.contains("sua bai")) {
-            return new AdminMenuChoice(2, messageText);
+        if (matchesIntent(normalized, "dang bai")) {
+            return new AdminMenuChoice(1, stripLeadingWords(messageText, 2));
         }
-        if (normalized.contains("xem lich")) {
+        if (matchesIntent(normalized, "dang tin")) {
+            return new AdminMenuChoice(1, stripLeadingWords(messageText, 2));
+        }
+        if (matchesIntent(normalized, "tao bai dang")) {
+            return new AdminMenuChoice(1, stripLeadingWords(messageText, 3));
+        }
+        if (matchesIntent(normalized, "tao post")) {
+            return new AdminMenuChoice(1, stripLeadingWords(messageText, 2));
+        }
+        if (matchesIntent(normalized, "sua bai")) {
+            return new AdminMenuChoice(2, stripLeadingWords(messageText, 2));
+        }
+        if (matchesIntent(normalized, "sua bai dang")) {
+            return new AdminMenuChoice(2, stripLeadingWords(messageText, 3));
+        }
+        if (matchesIntent(normalized, "cap nhat bai")) {
+            return new AdminMenuChoice(2, stripLeadingWords(messageText, 3));
+        }
+        if (matchesIntent(normalized, "xem lich")
+                || matchesIntent(normalized, "lich voffice")
+                || matchesIntent(normalized, "voffice")
+                || matchesIntent(normalized, "lich phong van")) {
             return new AdminMenuChoice(3, "");
         }
+        if (matchesIntent(normalized, "request")
+                || matchesIntent(normalized, "xem request")
+                || matchesIntent(normalized, "request hoi dong")
+                || matchesIntent(normalized, "request tu hoi dong")
+                || matchesIntent(normalized, "yeu cau hoi dong")) {
+            return new AdminMenuChoice(4, "");
+        }
         return null;
+    }
+
+    private boolean isAutoPostIntent(String normalized) {
+        String compact = compactText(normalized);
+        return matchesIntent(normalized, "dang bai")
+                || matchesIntent(normalized, "dang tin")
+                || matchesIntent(normalized, "tao bai dang")
+                || matchesIntent(normalized, "tao post")
+                || compact.contains("dangbai")
+                || compact.contains("dangtin")
+                || compact.contains("taobaidang")
+                || compact.contains("taopost")
+                || compact.contains("ngbai")
+                || compact.contains("ngboi");
+    }
+
+    private CouncilMenuChoice parseCouncilMenuChoice(String messageText) {
+        Matcher prefixMatcher = SUBMENU_PREFIX_PATTERN.matcher(messageText);
+        if (prefixMatcher.matches()) {
+            int option = Integer.parseInt(prefixMatcher.group(1));
+            String remaining = prefixMatcher.group(2) == null ? "" : prefixMatcher.group(2).trim();
+            return new CouncilMenuChoice(option, remaining);
+        }
+
+        String normalized = normalizeText(messageText);
+        if (matchesIntent(normalized, "xem lich")
+                || matchesIntent(normalized, "lich phong van")
+                || matchesIntent(normalized, "lich cua toi")) {
+            return new CouncilMenuChoice(1, "");
+        }
+        if (matchesIntent(normalized, "tuyen thanh vien")
+                || matchesIntent(normalized, "can tuyen")
+                || matchesIntent(normalized, "request tuyen")) {
+            return new CouncilMenuChoice(2, stripLeadingWords(messageText, normalized.startsWith("tuyen thanh vien") ? 3 : 2));
+        }
+        return null;
+    }
+
+    private void processCouncilHiringRequest(
+            PageAdminAccount councilAccount,
+            String senderId,
+            AdminConversationState state,
+            String text
+    ) {
+        if ("0".equals(text.trim())) {
+            state.mode = AdminConversationMode.IDLE;
+            sendCouncilMenu(councilAccount, senderId, "Da huy thao tac.");
+            return;
+        }
+        if (!StringUtils.hasText(text)) {
+            facebookMessengerService.sendTextMessage(senderId, "Hay mo ta noi dung can tuyen.");
+            return;
+        }
+
+        CouncilHiringRequest request = recruitmentCouncilService.createHiringRequest(councilAccount, text);
+        state.mode = AdminConversationMode.IDLE;
+        facebookMessengerService.sendTextMessage(senderId,
+                "Da gui request tuyen thanh vien cho HR.\n"
+                        + "Ma HD: " + request.getCouncilCode() + "\n"
+                        + "Ten: " + request.getCouncilName());
+
+        String hrMessage = "Request tuyen thanh vien tu Hoi dong\n"
+                + "RequestId: " + request.getId() + "\n"
+                + "Ma HD: " + request.getCouncilCode() + "\n"
+                + "Ten: " + request.getCouncilName() + "\n"
+                + "Noi dung: " + request.getRequestContent();
+        for (PageAdminAccount hrAccount : pageAdminAccountService.findActiveHrAccounts()) {
+            facebookMessengerService.sendTextMessage(hrAccount.getSenderId(), hrMessage);
+        }
+        sendCouncilMenu(councilAccount, senderId, null);
     }
 
     private ScheduleSubmenuChoice parseScheduleSubmenuChoice(String messageText) {
@@ -552,13 +779,33 @@ public class MessengerWebhookService {
         }
 
         String normalized = normalizeText(messageText);
-        if (normalized.contains("xem chi tiet lich")) {
+        if (matchesIntent(normalized, "xem chi tiet lich")
+                || matchesIntent(normalized, "xem chi tiet")
+                || matchesIntent(normalized, "chi tiet lich")) {
             return new ScheduleSubmenuChoice(1, "");
         }
-        if (normalized.contains("sua lich")) {
-            return new ScheduleSubmenuChoice(2, messageText);
+        if (matchesIntent(normalized, "sua lich")) {
+            return new ScheduleSubmenuChoice(2, stripLeadingWords(messageText, 2));
+        }
+        if (matchesIntent(normalized, "doi lich noi bo")) {
+            return new ScheduleSubmenuChoice(2, stripLeadingWords(messageText, 4));
         }
         return null;
+    }
+
+    private boolean matchesIntent(String normalizedText, String intent) {
+        return normalizedText.equals(intent)
+                || normalizedText.startsWith(intent + " ")
+                || normalizedText.endsWith(" " + intent)
+                || normalizedText.contains(" " + intent + " ");
+    }
+
+    private String stripLeadingWords(String originalText, int wordCount) {
+        String[] tokens = originalText.trim().split("\\s+");
+        if (tokens.length <= wordCount) {
+            return "";
+        }
+        return String.join(" ", Arrays.copyOfRange(tokens, wordCount, tokens.length));
     }
 
     private AdminJobEditRequest parseEditRequest(String text) {
@@ -605,7 +852,13 @@ public class MessengerWebhookService {
 
     private String normalizeText(String input) {
         String normalized = Normalizer.normalize(input == null ? "" : input, Normalizer.Form.NFD);
-        return normalized.replaceAll("\\p{M}", "").toLowerCase().trim();
+        normalized = normalized.replaceAll("\\p{M}", "").toLowerCase();
+        normalized = normalized.replaceAll("[^a-z0-9\\s]", " ");
+        return normalized.replaceAll("\\s+", " ").trim();
+    }
+
+    private String compactText(String input) {
+        return normalizeText(input).replace(" ", "");
     }
 
     private boolean isDuplicateMessage(String messageId) {
@@ -626,7 +879,8 @@ public class MessengerWebhookService {
         SCHEDULE_MENU,
         AWAIT_SCHEDULE_DETAIL_SLOT_ID,
         AWAIT_SCHEDULE_EDIT_SLOT_ID,
-        AWAIT_SCHEDULE_EDIT_REASON
+        AWAIT_SCHEDULE_EDIT_REASON,
+        AWAIT_COUNCIL_HIRING_REQUEST
     }
 
     private static class AdminConversationState {
@@ -644,6 +898,9 @@ public class MessengerWebhookService {
     }
 
     private record ScheduleSubmenuChoice(int option, String remainder) {
+    }
+
+    private record CouncilMenuChoice(int option, String remainder) {
     }
 
     private record AdminJobEditRequest(Long jobId, String content) {

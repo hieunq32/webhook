@@ -11,6 +11,8 @@ public interface InterviewConversationRepository extends JpaRepository<Interview
 
     Optional<InterviewConversation> findFirstByCandidateSenderIdOrderByUpdatedAtDesc(String candidateSenderId);
 
+    List<InterviewConversation> findAllByCandidateSenderIdOrderByUpdatedAtDesc(String candidateSenderId);
+
     Optional<InterviewConversation> findFirstByCandidateSenderIdAndStateInOrderByUpdatedAtDesc(
             String candidateSenderId,
             Collection<InterviewConversationState> states
@@ -20,6 +22,11 @@ public interface InterviewConversationRepository extends JpaRepository<Interview
 
     Optional<InterviewConversation> findFirstByCandidateSenderIdAndStateOrderByUpdatedAtDesc(
             String candidateSenderId,
+            InterviewConversationState state
+    );
+
+    List<InterviewConversation> findAllBySelectedCouncilSenderIdAndStateOrderByUpdatedAtDesc(
+            String selectedCouncilSenderId,
             InterviewConversationState state
     );
 }

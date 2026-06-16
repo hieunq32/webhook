@@ -21,4 +21,14 @@ public class InterviewSchedulingScheduler {
     public void autoConfirmHrTimeouts() {
         interviewSchedulingService.autoConfirmExpiredHrNotifications();
     }
+
+    @Scheduled(fixedDelay = 10000, initialDelay = 5000)
+    public void autoStartPassedCandidates() {
+        interviewSchedulingService.autoStartSchedulingForPassedCandidates();
+    }
+
+    @Scheduled(fixedDelay = 10000, initialDelay = 5000)
+    public void resetCandidatesWithoutPassCv() {
+        interviewSchedulingService.resetSchedulingForCandidatesWithoutPassCv();
+    }
 }

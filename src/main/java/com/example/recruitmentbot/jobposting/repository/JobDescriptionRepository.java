@@ -4,6 +4,7 @@ import com.example.recruitmentbot.jobposting.domain.JobDescription;
 import com.example.recruitmentbot.jobposting.domain.JobStatus;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface JobDescriptionRepository extends JpaRepository<JobDescription, Long> {
@@ -13,4 +14,6 @@ public interface JobDescriptionRepository extends JpaRepository<JobDescription, 
             Integer applicantCount,
             OffsetDateTime createdAt
     );
+
+    Optional<JobDescription> findFirstByTitleIgnoreCaseOrderByCreatedAtDesc(String title);
 }

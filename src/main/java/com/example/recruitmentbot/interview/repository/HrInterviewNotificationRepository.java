@@ -21,6 +21,12 @@ public interface HrInterviewNotificationRepository extends JpaRepository<HrInter
 
     List<HrInterviewNotification> findAllByConversationIdAndStatus(Long conversationId, HrInterviewNotificationStatus status);
 
+    List<HrInterviewNotification> findAllByConversationIdAndNotificationKindAndStatus(
+            Long conversationId,
+            com.example.recruitmentbot.interview.domain.HrInterviewNotificationKind notificationKind,
+            HrInterviewNotificationStatus status
+    );
+
     List<HrInterviewNotification> findAllByStatusAndResponseDeadlineAtBefore(
             HrInterviewNotificationStatus status,
             OffsetDateTime responseDeadlineAt

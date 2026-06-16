@@ -36,6 +36,15 @@ public class InterviewConversation {
     @Column(nullable = false, precision = 6, scale = 2)
     private BigDecimal cvScore;
 
+    @Column
+    private Long jobDescriptionId;
+
+    @Column
+    private Long selectedCouncilId;
+
+    @Column(length = 100)
+    private String selectedCouncilSenderId;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 40)
     private InterviewConversationState state;
@@ -107,6 +116,30 @@ public class InterviewConversation {
 
     public void setCvScore(BigDecimal cvScore) {
         this.cvScore = cvScore;
+    }
+
+    public Long getJobDescriptionId() {
+        return jobDescriptionId;
+    }
+
+    public void setJobDescriptionId(Long jobDescriptionId) {
+        this.jobDescriptionId = jobDescriptionId;
+    }
+
+    public Long getSelectedCouncilId() {
+        return selectedCouncilId;
+    }
+
+    public void setSelectedCouncilId(Long selectedCouncilId) {
+        this.selectedCouncilId = selectedCouncilId;
+    }
+
+    public String getSelectedCouncilSenderId() {
+        return selectedCouncilSenderId;
+    }
+
+    public void setSelectedCouncilSenderId(String selectedCouncilSenderId) {
+        this.selectedCouncilSenderId = selectedCouncilSenderId;
     }
 
     public InterviewConversationState getState() {

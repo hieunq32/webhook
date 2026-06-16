@@ -1,5 +1,8 @@
 package com.example.recruitmentbot.jobposting.service;
 
+import com.example.recruitmentbot.council.service.CouncilAssignmentResult;
+import com.example.recruitmentbot.council.service.RecruitmentCouncilService;
+import com.example.recruitmentbot.hradmin.domain.PageAdminAccount;
 import com.example.recruitmentbot.jobposting.config.FacebookJobPostingProperties;
 import com.example.recruitmentbot.jobposting.domain.FacebookJobPost;
 import com.example.recruitmentbot.jobposting.domain.FacebookPostStatus;
@@ -33,6 +36,7 @@ public class FacebookJobPostingService {
     private final FacebookPageClient facebookPageClient;
     private final JobPostContentGenerator jobPostContentGenerator;
     private final FacebookJobPostingProperties properties;
+    private final RecruitmentCouncilService recruitmentCouncilService;
 
     public FacebookJobPostingService(
             JobDescriptionService jobDescriptionService,
@@ -40,7 +44,8 @@ public class FacebookJobPostingService {
             FacebookJobPostRepository facebookJobPostRepository,
             FacebookPageClient facebookPageClient,
             JobPostContentGenerator jobPostContentGenerator,
-            FacebookJobPostingProperties properties
+            FacebookJobPostingProperties properties,
+            RecruitmentCouncilService recruitmentCouncilService
     ) {
         this.jobDescriptionService = jobDescriptionService;
         this.jobDescriptionRepository = jobDescriptionRepository;
@@ -48,6 +53,7 @@ public class FacebookJobPostingService {
         this.facebookPageClient = facebookPageClient;
         this.jobPostContentGenerator = jobPostContentGenerator;
         this.properties = properties;
+        this.recruitmentCouncilService = recruitmentCouncilService;
     }
 
     @Transactional
@@ -58,15 +64,33 @@ public class FacebookJobPostingService {
 
     @Transactional
     public FacebookPostOperationResponse createAndPublishFromText(String rawMessage) {
-        JobDescriptionUpsertRequest request = buildRequestFromRawText(rawMessage, JobStatus.OPEN, 0);
-        return createAndPublish(request);
+        return createAndPublishFromText(rawMessage, null);
+    }
+
+    @Transactional
+    public FacebookPostOperationResponse createAndPublishFromText(String rawMessage, PageAdminAccount actor) {
+        CouncilAssignmentResult assignmentInput = new CouncilAssignmentResult(rawMessage, null);
+        JobDescriptionUpsertRequest request = buildRequestFromRawText(assignmentInput.sanitizedJobContent(), JobStatus.OPEN, 0);
+        JobDescription saved = jobDescriptionService.createEntity(request);
+        CouncilAssignmentResult assignment = recruitmentCouncilService.assignCouncilsFromRawMessage(saved.getId(), rawMessage, actor);
+        if (!assignment.sanitizedJobContent().equals(rawMessage)) {
+            JobDescriptionUpsertRequest sanitizedRequest = buildRequestFromRawText(assignment.sanitizedJobContent(), JobStatus.OPEN, 0);
+            saved = jobDescriptionService.updateEntity(saved.getId(), sanitizedRequest);
+        }
+        return withCouncilSummary(publish(saved.getId()), assignment.councilSummary());
     }
 
     @Transactional
     public FacebookPostOperationResponse updateFromTextAndRepublish(Long jobDescriptionId, String rawMessage) {
+        return updateFromTextAndRepublish(jobDescriptionId, rawMessage, null);
+    }
+
+    @Transactional
+    public FacebookPostOperationResponse updateFromTextAndRepublish(Long jobDescriptionId, String rawMessage, PageAdminAccount actor) {
         JobDescription existing = jobDescriptionService.getEntity(jobDescriptionId);
+        CouncilAssignmentResult assignment = recruitmentCouncilService.assignCouncilsFromRawMessage(jobDescriptionId, rawMessage, actor);
         JobDescriptionUpsertRequest request = buildRequestFromRawText(
-                rawMessage,
+                assignment.sanitizedJobContent(),
                 existing.getStatus(),
                 existing.getApplicantCount()
         );
@@ -78,10 +102,12 @@ public class FacebookJobPostingService {
                     "update-and-republish",
                     "Only OPEN jobs can be re-posted to Facebook",
                     null,
-                    null
+                    null,
+                    assignment.councilSummary()
             );
         }
-        return findActivePost(jobDescriptionId).isPresent() ? repost(jobDescriptionId) : publish(jobDescriptionId);
+        FacebookPostOperationResponse response = findActivePost(jobDescriptionId).isPresent() ? repost(jobDescriptionId) : publish(jobDescriptionId);
+        return withCouncilSummary(response, assignment.councilSummary());
     }
 
     @Transactional
@@ -95,6 +121,7 @@ public class FacebookJobPostingService {
                     "update-and-republish",
                     "Only OPEN jobs can be published to Facebook",
                     null,
+                    null,
                     null
             );
         }
@@ -105,11 +132,11 @@ public class FacebookJobPostingService {
     public FacebookPostOperationResponse publish(Long jobDescriptionId) {
         JobDescription jobDescription = jobDescriptionService.getEntity(jobDescriptionId);
         if (!properties.enabled()) {
-            return new FacebookPostOperationResponse(jobDescriptionId, false, "publish", "Facebook job posting is disabled", null, null);
+            return new FacebookPostOperationResponse(jobDescriptionId, false, "publish", "Facebook job posting is disabled", null, null, null);
         }
         if (jobDescription.getStatus() != JobStatus.OPEN) {
             return new FacebookPostOperationResponse(jobDescriptionId, false, "publish",
-                    "Only OPEN jobs can be posted to Facebook", null, null);
+                    "Only OPEN jobs can be posted to Facebook", null, null, null);
         }
 
         Optional<FacebookJobPost> existing = findActivePost(jobDescriptionId);
@@ -117,7 +144,8 @@ public class FacebookJobPostingService {
             return new FacebookPostOperationResponse(jobDescriptionId, false, "publish",
                     "Active Facebook post already exists. Use repost endpoint instead.",
                     existing.get().getFacebookPostId(),
-                    existing.get().getGeneratedContent());
+                    existing.get().getGeneratedContent(),
+                    null);
         }
 
         return doPublish(jobDescription, "publish");
@@ -127,11 +155,11 @@ public class FacebookJobPostingService {
     public FacebookPostOperationResponse repost(Long jobDescriptionId) {
         JobDescription jobDescription = jobDescriptionService.getEntity(jobDescriptionId);
         if (!properties.enabled()) {
-            return new FacebookPostOperationResponse(jobDescriptionId, false, "repost", "Facebook job posting is disabled", null, null);
+            return new FacebookPostOperationResponse(jobDescriptionId, false, "repost", "Facebook job posting is disabled", null, null, null);
         }
         if (jobDescription.getStatus() != JobStatus.OPEN) {
             return new FacebookPostOperationResponse(jobDescriptionId, false, "repost",
-                    "Only OPEN jobs can be re-posted to Facebook", null, null);
+                    "Only OPEN jobs can be re-posted to Facebook", null, null, null);
         }
 
         Optional<FacebookJobPost> existing = findActivePost(jobDescriptionId);
@@ -141,7 +169,8 @@ public class FacebookJobPostingService {
                 return new FacebookPostOperationResponse(jobDescriptionId, false, "repost",
                         "Failed to delete old Facebook post before re-posting",
                         existing.get().getFacebookPostId(),
-                        existing.get().getGeneratedContent());
+                        existing.get().getGeneratedContent(),
+                        null);
             }
             existing.get().markDeleted();
             facebookJobPostRepository.save(existing.get());
@@ -155,7 +184,7 @@ public class FacebookJobPostingService {
         Optional<FacebookJobPost> activePost = findActivePost(jobDescriptionId);
         if (activePost.isEmpty()) {
             return new FacebookPostOperationResponse(jobDescriptionId, true, "delete",
-                    "No active Facebook post found for this job", null, null);
+                    "No active Facebook post found for this job", null, null, null);
         }
 
         boolean deleted = facebookPageClient.deletePost(activePost.get().getFacebookPostId());
@@ -163,7 +192,8 @@ public class FacebookJobPostingService {
             return new FacebookPostOperationResponse(jobDescriptionId, false, "delete",
                     "Failed to delete Facebook post",
                     activePost.get().getFacebookPostId(),
-                    activePost.get().getGeneratedContent());
+                    activePost.get().getGeneratedContent(),
+                    null);
         }
 
         activePost.get().markDeleted();
@@ -171,7 +201,8 @@ public class FacebookJobPostingService {
         return new FacebookPostOperationResponse(jobDescriptionId, true, "delete",
                 "Facebook post deleted successfully",
                 activePost.get().getFacebookPostId(),
-                activePost.get().getGeneratedContent());
+                activePost.get().getGeneratedContent(),
+                null);
     }
 
     @Transactional
@@ -222,6 +253,7 @@ public class FacebookJobPostingService {
                     action,
                     "Failed to generate job post content via AI: " + ex.getMessage(),
                     null,
+                    null,
                     null
             );
         }
@@ -234,7 +266,8 @@ public class FacebookJobPostingService {
                     action,
                     "Failed to publish job to Facebook: " + result.errorMessage(),
                     null,
-                    generatedContent
+                    generatedContent,
+                    null
             );
         }
 
@@ -251,7 +284,20 @@ public class FacebookJobPostingService {
                 action,
                 "Facebook post published successfully",
                 result.facebookPostId(),
-                generatedContent
+                generatedContent,
+                null
+        );
+    }
+
+    private FacebookPostOperationResponse withCouncilSummary(FacebookPostOperationResponse response, String councilSummary) {
+        return new FacebookPostOperationResponse(
+                response.jobDescriptionId(),
+                response.success(),
+                response.action(),
+                response.message(),
+                response.facebookPostId(),
+                response.generatedContent(),
+                councilSummary
         );
     }
 
