@@ -32,7 +32,14 @@ public class OllamaService {
     }
 
     public String generateRecruitmentReply(String candidateMessage) {
+        return generate(ollamaProperties.systemPrompt(), candidateMessage);
+    }
+
+    public String generate(String systemPrompt, String userPrompt) {
         validateOllamaConfiguration();
+        if (!StringUtils.hasText(systemPrompt) || !StringUtils.hasText(userPrompt)) {
+            throw new IllegalStateException("Ollama prompt content is incomplete");
+        }
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -41,8 +48,8 @@ public class OllamaService {
                 ollamaProperties.model(),
                 false,
                 List.of(
-                        new OllamaMessage("system", ollamaProperties.systemPrompt()),
-                        new OllamaMessage("user", candidateMessage)
+                        new OllamaMessage("system", systemPrompt),
+                        new OllamaMessage("user", userPrompt)
                 )
         );
 

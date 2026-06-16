@@ -68,6 +68,33 @@ ollama:
     Hinh thuc lam viec: {{workType}}
     Trang thai: {{status}}
 
+interview:
+  enabled: ${INTERVIEW_SCHEDULING_ENABLED:true}
+  hr-recipient-id: ${INTERVIEW_HR_RECIPIENT_ID:REPLACE_ME}
+  default-department: ${INTERVIEW_DEFAULT_DEPARTMENT:Engineering}
+  interview-location: ${INTERVIEW_LOCATION:VCS office - interview room 3}
+  preparation-notes: ${INTERVIEW_PREPARATION_NOTES:Mang theo CV cap nhat va den truoc 10 phut.}
+  slot-offer-count: ${INTERVIEW_SLOT_OFFER_COUNT:3}
+  soft-lock-minutes: ${INTERVIEW_SOFT_LOCK_MINUTES:15}
+  hr-response-timeout-minutes: ${INTERVIEW_HR_RESPONSE_TIMEOUT_MINUTES:120}
+  slot-selection-prompt-template: |
+    You receive offered interview slots and one candidate reply.
+    Decide which single option the candidate means.
+    Return exactly one line and nothing else, using one of these formats:
+    SELECT:<option_number>
+    RESCHEDULE
+    UNSURE
+    AMBIGUOUS
+    NO_MATCH
+    Use RESCHEDULE if the candidate asks for another slot or another day.
+    Use UNSURE if the candidate is hesitant or asks for advice.
+    Use AMBIGUOUS if more than one option fits the reply.
+    Use NO_MATCH if the reply does not map to any offered slot.
+    Offered slots:
+    {{options}}
+    Candidate reply:
+    {{reply}}
+
 mock:
   recruitment:
     greeting-keywords:

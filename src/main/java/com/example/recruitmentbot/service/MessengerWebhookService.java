@@ -4,10 +4,10 @@ import com.example.recruitmentbot.config.FacebookHrProperties;
 import com.example.recruitmentbot.hradmin.domain.PageAdminAccount;
 import com.example.recruitmentbot.hradmin.domain.PageAdminPermission;
 import com.example.recruitmentbot.hradmin.service.PageAdminAccountService;
+import com.example.recruitmentbot.interview.service.CandidateProfileService;
+import com.example.recruitmentbot.interview.service.InterviewSchedulingService;
 import com.example.recruitmentbot.jobposting.dto.FacebookPostOperationResponse;
-import com.example.recruitmentbot.jobposting.dto.JobDescriptionResponse;
 import com.example.recruitmentbot.jobposting.service.FacebookJobPostingService;
-import com.example.recruitmentbot.jobposting.service.JobDescriptionService;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.text.Normalizer;
 import java.util.List;
@@ -39,8 +39,9 @@ public class MessengerWebhookService {
     private final FacebookMessengerService facebookMessengerService;
     private final FacebookHrProperties facebookHrProperties;
     private final PageAdminAccountService pageAdminAccountService;
+    private final CandidateProfileService candidateProfileService;
     private final FacebookJobPostingService facebookJobPostingService;
-    private final JobDescriptionService jobDescriptionService;
+    private final InterviewSchedulingService interviewSchedulingService;
     private final ExecutorService webhookExecutor = Executors.newCachedThreadPool();
     private final Map<String, Long> processedMessageIds = new ConcurrentHashMap<>();
     private final Map<String, AdminConversationState> adminConversationStates = new ConcurrentHashMap<>();
@@ -50,15 +51,17 @@ public class MessengerWebhookService {
             FacebookMessengerService facebookMessengerService,
             FacebookHrProperties facebookHrProperties,
             PageAdminAccountService pageAdminAccountService,
+            CandidateProfileService candidateProfileService,
             FacebookJobPostingService facebookJobPostingService,
-            JobDescriptionService jobDescriptionService
+            InterviewSchedulingService interviewSchedulingService
     ) {
         this.recruitmentReplyService = recruitmentReplyService;
         this.facebookMessengerService = facebookMessengerService;
         this.facebookHrProperties = facebookHrProperties;
         this.pageAdminAccountService = pageAdminAccountService;
+        this.candidateProfileService = candidateProfileService;
         this.facebookJobPostingService = facebookJobPostingService;
-        this.jobDescriptionService = jobDescriptionService;
+        this.interviewSchedulingService = interviewSchedulingService;
     }
 
     public void processIncomingWebhook(JsonNode payload) {
@@ -118,9 +121,23 @@ public class MessengerWebhookService {
                 return;
             }
 
+            if (interviewSchedulingService.handleHrReplyIfApplicable(senderId, messageText)) {
+                return;
+            }
+
             Optional<PageAdminAccount> adminAccount = resolveAdminAccount(senderId);
             if (adminAccount.isPresent()) {
                 handleAdminConversation(adminAccount.get(), senderId, messageText);
+                return;
+            }
+
+            candidateProfileService.ensureProfileExistsForMessengerSender(senderId);
+
+            if (interviewSchedulingService.handleCandidateReplyIfApplicable(senderId, messageText)) {
+                return;
+            }
+
+            if (interviewSchedulingService.autoStartSchedulingForPassedCandidateIfNeeded(senderId)) {
                 return;
             }
 
@@ -348,39 +365,7 @@ public class MessengerWebhookService {
     }
 
     private void sendJobScheduleSummary(PageAdminAccount adminAccount, String senderId) {
-        List<JobDescriptionResponse> jobs = jobDescriptionService.list();
-        if (jobs.isEmpty()) {
-            facebookMessengerService.sendTextMessage(senderId, "Hien chua co job description nao.");
-            sendAdminMenu(adminAccount, senderId, "Ban co the tao moi hoac sua bai.");
-            return;
-        }
-
-        StringBuilder builder = new StringBuilder("Lich cap nhat tuyen dung:\n");
-        int count = 0;
-        for (JobDescriptionResponse job : jobs) {
-            if (count >= ADMIN_JOB_LIST_LIMIT) {
-                break;
-            }
-            count++;
-            String postStatus = job.activeFacebookPost() != null
-                    ? "PostID=" + job.activeFacebookPost().facebookPostId()
-                    : "Not posted";
-            builder.append(count)
-                    .append(". [")
-                    .append(job.id())
-                    .append("] ")
-                    .append(job.title())
-                    .append(" | ")
-                    .append(job.status())
-                    .append(" | ")
-                    .append(postStatus)
-                    .append('\n');
-        }
-        if (jobs.size() > ADMIN_JOB_LIST_LIMIT) {
-            builder.append("... va ").append(jobs.size() - ADMIN_JOB_LIST_LIMIT)
-                    .append(" job khac.");
-        }
-        facebookMessengerService.sendTextMessage(senderId, builder.toString());
+        facebookMessengerService.sendTextMessage(senderId, interviewSchedulingService.buildUpcomingVOfficeScheduleSummary());
         sendAdminMenu(adminAccount, senderId, null);
     }
 
