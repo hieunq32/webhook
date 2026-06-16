@@ -48,6 +48,9 @@ public class InterviewSlot {
     @Column
     private OffsetDateTime bookedAt;
 
+    @Column(columnDefinition = "TEXT")
+    private String statusNote;
+
     @Column(nullable = false)
     private OffsetDateTime createdAt;
 
@@ -130,6 +133,14 @@ public class InterviewSlot {
         this.bookedAt = bookedAt;
     }
 
+    public String getStatusNote() {
+        return statusNote;
+    }
+
+    public void setStatusNote(String statusNote) {
+        this.statusNote = statusNote;
+    }
+
     public boolean isExpiredSoftLock(OffsetDateTime now) {
         return status == InterviewSlotStatus.SOFT_LOCKED
                 && lockExpiresAt != null
@@ -142,6 +153,7 @@ public class InterviewSlot {
         lockExpiresAt = expiresAt;
         bookedByConversationId = null;
         bookedAt = null;
+        statusNote = null;
     }
 
     public void book(Long conversationId) {
@@ -150,6 +162,7 @@ public class InterviewSlot {
         bookedAt = OffsetDateTime.now();
         lockedByConversationId = null;
         lockExpiresAt = null;
+        statusNote = null;
     }
 
     public void release() {
@@ -159,6 +172,16 @@ public class InterviewSlot {
         if (bookedByConversationId == null) {
             bookedAt = null;
         }
+        statusNote = null;
+    }
+
+    public void markUnavailable(String reason) {
+        status = InterviewSlotStatus.UNAVAILABLE;
+        statusNote = reason;
+        lockedByConversationId = null;
+        lockExpiresAt = null;
+        bookedByConversationId = null;
+        bookedAt = null;
     }
 
     @PrePersist

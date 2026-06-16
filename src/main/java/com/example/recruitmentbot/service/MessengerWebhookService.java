@@ -33,6 +33,7 @@ public class MessengerWebhookService {
     private static final long ADMIN_SESSION_TTL_MILLIS = 10 * 60 * 1000L;
     private static final int ADMIN_JOB_LIST_LIMIT = 8;
     private static final Pattern MENU_PREFIX_PATTERN = Pattern.compile("^\\s*([1-3])[\\s\\.:,-]*(.*)$");
+    private static final Pattern SUBMENU_PREFIX_PATTERN = Pattern.compile("^\\s*([1-2])[\\s\\.:,-]*(.*)$");
     private static final Pattern JOB_ID_PREFIX_PATTERN = Pattern.compile("^\\s*(\\d+)\\s*(.*)$");
 
     private final RecruitmentReplyService recruitmentReplyService;
@@ -217,9 +218,14 @@ public class MessengerWebhookService {
             case AWAIT_JOB_DESCRIPTION -> processJobCreationInput(adminAccount, senderId, state, sanitizedText);
             case AWAIT_EDIT_JOB_ID -> processEditJobSelection(adminAccount, senderId, state, sanitizedText);
             case AWAIT_JOB_UPDATE_CONTENT -> processJobUpdateContent(adminAccount, senderId, state, sanitizedText);
+            case SCHEDULE_MENU -> processScheduleMenuInput(adminAccount, senderId, state, sanitizedText);
+            case AWAIT_SCHEDULE_DETAIL_SLOT_ID -> processScheduleDetailRequest(adminAccount, senderId, state, sanitizedText);
+            case AWAIT_SCHEDULE_EDIT_SLOT_ID -> processScheduleEditSelection(adminAccount, senderId, state, sanitizedText);
+            case AWAIT_SCHEDULE_EDIT_REASON -> processScheduleEditReason(adminAccount, senderId, state, sanitizedText);
             default -> {
                 state.mode = AdminConversationMode.IDLE;
                 state.targetJobId = null;
+                state.targetSlotId = null;
                 sendAdminMenu(adminAccount, senderId, "Da quay ve menu chinh.");
             }
         }
@@ -264,7 +270,7 @@ public class MessengerWebhookService {
                     sendAdminMenu(adminAccount, senderId, "Tai khoan nay khong co quyen xem lich.");
                     return;
                 }
-                state.mode = AdminConversationMode.IDLE;
+                state.mode = AdminConversationMode.SCHEDULE_MENU;
                 sendJobScheduleSummary(adminAccount, senderId);
             }
             default -> sendAdminMenu(adminAccount, senderId, "Lua chon khong hop le.");
@@ -366,7 +372,120 @@ public class MessengerWebhookService {
 
     private void sendJobScheduleSummary(PageAdminAccount adminAccount, String senderId) {
         facebookMessengerService.sendTextMessage(senderId, interviewSchedulingService.buildUpcomingVOfficeScheduleSummary());
-        sendAdminMenu(adminAccount, senderId, null);
+        sendScheduleActionMenu(adminAccount, senderId);
+    }
+
+    private void sendScheduleActionMenu(PageAdminAccount adminAccount, String senderId) {
+        String displayName = StringUtils.hasText(adminAccount.getDisplayName())
+                ? adminAccount.getDisplayName()
+                : "HR";
+        String menu = "Menu HR - Xin chào " + displayName + ":\n"
+                + "1. Xem chi tiết lịch\n"
+                + "2. Sửa lịch\n"
+                + "Nhap 1/2 hoac go ten chuc nang.";
+        facebookMessengerService.sendTextMessage(senderId, menu);
+    }
+
+    private void processScheduleMenuInput(
+            PageAdminAccount adminAccount,
+            String senderId,
+            AdminConversationState state,
+            String text
+    ) {
+        if ("0".equals(text.trim())) {
+            state.mode = AdminConversationMode.IDLE;
+            sendAdminMenu(adminAccount, senderId, "Da quay ve menu chinh.");
+            return;
+        }
+
+        ScheduleSubmenuChoice choice = parseScheduleSubmenuChoice(text);
+        if (choice == null) {
+            sendScheduleActionMenu(adminAccount, senderId);
+            return;
+        }
+
+        if (choice.option() == 1) {
+            state.mode = AdminConversationMode.AWAIT_SCHEDULE_DETAIL_SLOT_ID;
+            facebookMessengerService.sendTextMessage(senderId, "Gui slotId de xem chi tiet lich.");
+            return;
+        }
+
+        state.mode = AdminConversationMode.AWAIT_SCHEDULE_EDIT_SLOT_ID;
+        if (StringUtils.hasText(choice.remainder())) {
+            processScheduleEditSelection(adminAccount, senderId, state, choice.remainder());
+        } else {
+            facebookMessengerService.sendTextMessage(senderId,
+                    "Gui theo format: <slotId> <ly do sua lich>, hoac gui <slotId> truoc roi nhap ly do o buoc sau.");
+        }
+    }
+
+    private void processScheduleDetailRequest(
+            PageAdminAccount adminAccount,
+            String senderId,
+            AdminConversationState state,
+            String text
+    ) {
+        Long slotId = parseLeadingLong(text);
+        if (slotId == null) {
+            facebookMessengerService.sendTextMessage(senderId, "Khong xac dinh duoc slotId. Hay gui lai slotId.");
+            return;
+        }
+        state.mode = AdminConversationMode.SCHEDULE_MENU;
+        facebookMessengerService.sendTextMessage(senderId, interviewSchedulingService.buildSlotDetail(slotId));
+        sendScheduleActionMenu(adminAccount, senderId);
+    }
+
+    private void processScheduleEditSelection(
+            PageAdminAccount adminAccount,
+            String senderId,
+            AdminConversationState state,
+            String text
+    ) {
+        AdminJobEditRequest editRequest = parseEditRequest(text);
+        if (editRequest.jobId() == null) {
+            facebookMessengerService.sendTextMessage(senderId,
+                    "Khong xac dinh duoc slotId. Hay gui theo format: <slotId> <ly do sua lich>.");
+            return;
+        }
+
+        state.targetSlotId = editRequest.jobId();
+        if (!StringUtils.hasText(editRequest.content())) {
+            state.mode = AdminConversationMode.AWAIT_SCHEDULE_EDIT_REASON;
+            facebookMessengerService.sendTextMessage(senderId,
+                    "Da nhan slotId=" + editRequest.jobId() + ". Hay gui ly do sua lich.");
+            return;
+        }
+
+        state.mode = AdminConversationMode.SCHEDULE_MENU;
+        String result = interviewSchedulingService.editScheduleByHr(editRequest.jobId(), editRequest.content(), senderId);
+        facebookMessengerService.sendTextMessage(senderId, result);
+        sendJobScheduleSummary(adminAccount, senderId);
+    }
+
+    private void processScheduleEditReason(
+            PageAdminAccount adminAccount,
+            String senderId,
+            AdminConversationState state,
+            String text
+    ) {
+        if ("0".equals(text.trim())) {
+            state.mode = AdminConversationMode.SCHEDULE_MENU;
+            state.targetSlotId = null;
+            sendScheduleActionMenu(adminAccount, senderId);
+            return;
+        }
+        if (state.targetSlotId == null) {
+            state.mode = AdminConversationMode.SCHEDULE_MENU;
+            facebookMessengerService.sendTextMessage(senderId, "Khong tim thay slot dang sua. Moi chon lai.");
+            sendScheduleActionMenu(adminAccount, senderId);
+            return;
+        }
+
+        String result = interviewSchedulingService.editScheduleByHr(state.targetSlotId, text, senderId);
+        state.mode = AdminConversationMode.SCHEDULE_MENU;
+        state.targetSlotId = null;
+        facebookMessengerService.sendTextMessage(senderId, result);
+        sendJobScheduleSummary(adminAccount, senderId);
     }
 
     private void sendAdminMenu(PageAdminAccount adminAccount, String senderId, String prefix) {
@@ -424,6 +543,24 @@ public class MessengerWebhookService {
         return null;
     }
 
+    private ScheduleSubmenuChoice parseScheduleSubmenuChoice(String messageText) {
+        Matcher prefixMatcher = SUBMENU_PREFIX_PATTERN.matcher(messageText);
+        if (prefixMatcher.matches()) {
+            int option = Integer.parseInt(prefixMatcher.group(1));
+            String remaining = prefixMatcher.group(2) == null ? "" : prefixMatcher.group(2).trim();
+            return new ScheduleSubmenuChoice(option, remaining);
+        }
+
+        String normalized = normalizeText(messageText);
+        if (normalized.contains("xem chi tiet lich")) {
+            return new ScheduleSubmenuChoice(1, "");
+        }
+        if (normalized.contains("sua lich")) {
+            return new ScheduleSubmenuChoice(2, messageText);
+        }
+        return null;
+    }
+
     private AdminJobEditRequest parseEditRequest(String text) {
         if (!StringUtils.hasText(text)) {
             return new AdminJobEditRequest(null, null);
@@ -436,6 +573,17 @@ public class MessengerWebhookService {
         Long jobId = Long.parseLong(matcher.group(1));
         String content = matcher.group(2);
         return new AdminJobEditRequest(jobId, StringUtils.hasText(content) ? content.trim() : null);
+    }
+
+    private Long parseLeadingLong(String text) {
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        Matcher matcher = JOB_ID_PREFIX_PATTERN.matcher(text.trim());
+        if (!matcher.matches()) {
+            return null;
+        }
+        return Long.parseLong(matcher.group(1));
     }
 
     private void cleanupAdminConversations() {
@@ -474,12 +622,17 @@ public class MessengerWebhookService {
         IDLE,
         AWAIT_JOB_DESCRIPTION,
         AWAIT_EDIT_JOB_ID,
-        AWAIT_JOB_UPDATE_CONTENT
+        AWAIT_JOB_UPDATE_CONTENT,
+        SCHEDULE_MENU,
+        AWAIT_SCHEDULE_DETAIL_SLOT_ID,
+        AWAIT_SCHEDULE_EDIT_SLOT_ID,
+        AWAIT_SCHEDULE_EDIT_REASON
     }
 
     private static class AdminConversationState {
         private AdminConversationMode mode = AdminConversationMode.IDLE;
         private Long targetJobId;
+        private Long targetSlotId;
         private long lastActiveAt = System.currentTimeMillis();
 
         void touch() {
@@ -488,6 +641,9 @@ public class MessengerWebhookService {
     }
 
     private record AdminMenuChoice(int option, String remainder) {
+    }
+
+    private record ScheduleSubmenuChoice(int option, String remainder) {
     }
 
     private record AdminJobEditRequest(Long jobId, String content) {

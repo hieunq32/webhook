@@ -52,6 +52,13 @@ public class InterviewConversation {
     @Column
     private OffsetDateTime hrDecisionDeadlineAt;
 
+    @Column(columnDefinition = "TEXT")
+    private String lastRescheduleReason;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 40)
+    private InterviewConversationState rescheduleSourceState;
+
     @Column(nullable = false)
     private OffsetDateTime createdAt;
 
@@ -140,6 +147,22 @@ public class InterviewConversation {
 
     public void setHrDecisionDeadlineAt(OffsetDateTime hrDecisionDeadlineAt) {
         this.hrDecisionDeadlineAt = hrDecisionDeadlineAt;
+    }
+
+    public String getLastRescheduleReason() {
+        return lastRescheduleReason;
+    }
+
+    public void setLastRescheduleReason(String lastRescheduleReason) {
+        this.lastRescheduleReason = lastRescheduleReason;
+    }
+
+    public InterviewConversationState getRescheduleSourceState() {
+        return rescheduleSourceState;
+    }
+
+    public void setRescheduleSourceState(InterviewConversationState rescheduleSourceState) {
+        this.rescheduleSourceState = rescheduleSourceState;
     }
 
     public OffsetDateTime getCreatedAt() {

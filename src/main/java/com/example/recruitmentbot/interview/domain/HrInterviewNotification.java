@@ -30,6 +30,10 @@ public class HrInterviewNotification {
     private Long interviewSlotId;
 
     @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 40)
+    private HrInterviewNotificationKind notificationKind;
+
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private HrInterviewNotificationStatus status;
 
@@ -77,6 +81,14 @@ public class HrInterviewNotification {
 
     public void setInterviewSlotId(Long interviewSlotId) {
         this.interviewSlotId = interviewSlotId;
+    }
+
+    public HrInterviewNotificationKind getNotificationKind() {
+        return notificationKind;
+    }
+
+    public void setNotificationKind(HrInterviewNotificationKind notificationKind) {
+        this.notificationKind = notificationKind;
     }
 
     public HrInterviewNotificationStatus getStatus() {

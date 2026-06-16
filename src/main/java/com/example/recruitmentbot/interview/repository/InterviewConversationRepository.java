@@ -17,4 +17,9 @@ public interface InterviewConversationRepository extends JpaRepository<Interview
     );
 
     List<InterviewConversation> findAllByStateIn(Collection<InterviewConversationState> states);
+
+    Optional<InterviewConversation> findFirstByCandidateSenderIdAndStateOrderByUpdatedAtDesc(
+            String candidateSenderId,
+            InterviewConversationState state
+    );
 }

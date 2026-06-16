@@ -59,6 +59,8 @@ CREATE TABLE interview_conversation (
     selected_slot_id BIGINT,
     selection_lock_expires_at TIMESTAMP WITH TIME ZONE,
     hr_decision_deadline_at TIMESTAMP WITH TIME ZONE,
+    last_reschedule_reason TEXT,
+    reschedule_source_state VARCHAR(40),
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
@@ -77,6 +79,7 @@ CREATE TABLE interview_slot (
     lock_expires_at TIMESTAMP WITH TIME ZONE,
     booked_by_conversation_id BIGINT,
     booked_at TIMESTAMP WITH TIME ZONE,
+    status_note TEXT,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
@@ -89,6 +92,7 @@ CREATE TABLE hr_interview_notification (
     conversation_id BIGINT NOT NULL REFERENCES interview_conversation(id),
     hr_recipient_id VARCHAR(100) NOT NULL,
     interview_slot_id BIGINT NOT NULL REFERENCES interview_slot(id),
+    notification_kind VARCHAR(40) NOT NULL,
     status VARCHAR(30) NOT NULL,
     message_body TEXT NOT NULL,
     sent_at TIMESTAMP WITH TIME ZONE NOT NULL,

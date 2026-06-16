@@ -4,5 +4,7 @@ public enum HrInterviewNotificationStatus {
     PENDING,
     CONFIRMED,
     RESCHEDULE_REQUESTED,
-    AUTO_CONFIRMED
+    AUTO_CONFIRMED,
+    REJECTED,
+    CANCELLED
 }

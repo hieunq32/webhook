@@ -19,6 +19,8 @@ public interface HrInterviewNotificationRepository extends JpaRepository<HrInter
             HrInterviewNotificationStatus status
     );
 
+    List<HrInterviewNotification> findAllByConversationIdAndStatus(Long conversationId, HrInterviewNotificationStatus status);
+
     List<HrInterviewNotification> findAllByStatusAndResponseDeadlineAtBefore(
             HrInterviewNotificationStatus status,
             OffsetDateTime responseDeadlineAt

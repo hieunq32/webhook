@@ -2,6 +2,7 @@ package com.example.recruitmentbot.interview.service;
 
 import com.example.recruitmentbot.interview.config.InterviewSchedulingProperties;
 import com.example.recruitmentbot.interview.domain.CandidateProfile;
+import com.example.recruitmentbot.interview.domain.HrInterviewNotificationKind;
 import com.example.recruitmentbot.interview.domain.HrInterviewNotification;
 import com.example.recruitmentbot.interview.domain.HrInterviewNotificationStatus;
 import com.example.recruitmentbot.interview.domain.InterviewConversation;
@@ -16,6 +17,7 @@ import com.example.recruitmentbot.interview.repository.InterviewConversationRepo
 import com.example.recruitmentbot.interview.repository.InterviewSlotRepository;
 import jakarta.transaction.Transactional;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -33,12 +35,15 @@ import org.springframework.util.StringUtils;
 public class InterviewSchedulingService {
 
     private static final Logger log = LoggerFactory.getLogger(InterviewSchedulingService.class);
+    private static final ZoneId DISPLAY_ZONE = ZoneId.of("Asia/Saigon");
     private static final DateTimeFormatter SLOT_LABEL_FORMATTER =
             DateTimeFormatter.ofPattern("EEEE, dd/MM/yyyy HH:mm", Locale.ENGLISH);
     private static final EnumSet<InterviewConversationState> ACTIVE_CANDIDATE_STATES =
             EnumSet.of(
                     InterviewConversationState.AWAITING_SLOT_SELECTION,
                     InterviewConversationState.HR_PENDING,
+                    InterviewConversationState.AWAITING_RESCHEDULE_REASON,
+                    InterviewConversationState.HR_RESCHEDULE_REVIEW,
                     InterviewConversationState.RESCHEDULE_REQUESTED
             );
 
@@ -141,6 +146,39 @@ public class InterviewSchedulingService {
         if (!properties.enabled()) {
             return false;
         }
+        Optional<InterviewConversation> latestConversation =
+                conversationRepository.findFirstByCandidateSenderIdOrderByUpdatedAtDesc(senderId);
+        if (latestConversation.isPresent()
+                && (latestConversation.get().getState() == InterviewConversationState.CONFIRMED
+                || latestConversation.get().getState() == InterviewConversationState.HR_PENDING)
+                && isRescheduleRequest(messageText)) {
+            initiateCandidateRescheduleRequest(latestConversation.get());
+            return true;
+        }
+
+        Optional<InterviewConversation> waitingForReason = conversationRepository
+                .findFirstByCandidateSenderIdAndStateOrderByUpdatedAtDesc(
+                        senderId,
+                        InterviewConversationState.AWAITING_RESCHEDULE_REASON
+                );
+        if (waitingForReason.isPresent()) {
+            captureCandidateRescheduleReason(waitingForReason.get(), messageText);
+            return true;
+        }
+
+        Optional<InterviewConversation> waitingHrReview = conversationRepository
+                .findFirstByCandidateSenderIdAndStateOrderByUpdatedAtDesc(
+                        senderId,
+                        InterviewConversationState.HR_RESCHEDULE_REVIEW
+                );
+        if (waitingHrReview.isPresent()) {
+            channelMessagingService.sendText(
+                    senderId,
+                    "Mình đã gửi yêu cầu đổi lịch của bạn tới HR và đang chờ phản hồi. Khi HR duyệt, mình sẽ gửi danh sách lịch mới."
+            );
+            return true;
+        }
+
         Optional<InterviewConversation> conversationOptional =
                 conversationRepository.findFirstByCandidateSenderIdAndStateInOrderByUpdatedAtDesc(senderId, ACTIVE_CANDIDATE_STATES);
         if (conversationOptional.isEmpty()) {
@@ -211,6 +249,9 @@ public class InterviewSchedulingService {
                         senderId,
                         HrInterviewNotificationStatus.PENDING
                 );
+        if (pendingNotifications.isEmpty()) {
+            return false;
+        }
         HrInterviewNotification notification = resolvePendingNotification(pendingNotifications, conversationId);
         if (notification == null) {
             channelMessagingService.sendText(senderId,
@@ -222,9 +263,17 @@ public class InterviewSchedulingService {
                 .orElseThrow(() -> new IllegalStateException("Interview conversation not found: " + notification.getConversationId()));
 
         if (action == HrAction.CONFIRM) {
-            confirmByHr(conversation, notification);
+            if (notification.getNotificationKind() == HrInterviewNotificationKind.CANDIDATE_RESCHEDULE_REQUEST) {
+                rejectCandidateRescheduleRequest(conversation, notification);
+            } else {
+                confirmByHr(conversation, notification);
+            }
         } else {
-            requestReschedule(conversation, notification);
+            if (notification.getNotificationKind() == HrInterviewNotificationKind.CANDIDATE_RESCHEDULE_REQUEST) {
+                approveCandidateRescheduleRequest(conversation, notification);
+            } else {
+                requestReschedule(conversation, notification);
+            }
         }
         return true;
     }
@@ -259,6 +308,22 @@ public class InterviewSchedulingService {
             InterviewConversation conversation = conversationRepository.findById(notification.getConversationId())
                     .orElse(null);
             if (conversation == null || conversation.getState() != InterviewConversationState.HR_PENDING) {
+                if (conversation != null
+                        && conversation.getState() == InterviewConversationState.HR_RESCHEDULE_REVIEW
+                        && notification.getNotificationKind() == HrInterviewNotificationKind.CANDIDATE_RESCHEDULE_REQUEST) {
+                    notification.setStatus(HrInterviewNotificationStatus.REJECTED);
+                    notification.setRespondedAt(now);
+                    restoreConversationAfterRescheduleDenied(conversation);
+                    channelMessagingService.sendText(
+                            conversation.getCandidateSenderId(),
+                            "HR chưa phản hồi kịp yêu cầu đổi lịch. Tạm thời hệ thống giữ nguyên lịch phỏng vấn cũ của bạn."
+                    );
+                    channelMessagingService.sendText(
+                            notification.getHrRecipientId(),
+                            "Yêu cầu đổi lịch của ứng viên cho mã " + conversation.getId()
+                                    + " đã hết hạn, hệ thống giữ nguyên lịch cũ."
+                    );
+                }
                 continue;
             }
             notification.setStatus(HrInterviewNotificationStatus.AUTO_CONFIRMED);
@@ -299,12 +364,86 @@ public class InterviewSchedulingService {
             count++;
             builder.append(count)
                     .append(". ")
+                    .append("[slotId=").append(slot.getId()).append("] ")
                     .append(formatSlotLabel(slot))
                     .append(" | ")
                     .append(mapSlotStatus(slot))
                     .append('\n');
         }
         return builder.toString().trim();
+    }
+
+    @Transactional
+    public String buildSlotDetail(Long slotId) {
+        ensureEnabled();
+        InterviewSlot slot = slotRepository.findById(slotId)
+                .orElseThrow(() -> new IllegalStateException("Interview slot not found: " + slotId));
+
+        StringBuilder builder = new StringBuilder();
+        builder.append("Chi tiết lịch [slotId=").append(slot.getId()).append("]\n");
+        builder.append("Thời gian: ").append(formatSlotLabel(slot)).append('\n');
+        builder.append("Phòng ban: ").append(slot.getDepartment()).append('\n');
+        builder.append("Trạng thái: ").append(mapSlotStatus(slot)).append('\n');
+        if (StringUtils.hasText(slot.getStatusNote())) {
+            builder.append("Ghi chú nội bộ: ").append(slot.getStatusNote()).append('\n');
+        }
+
+        if (slot.getBookedByConversationId() != null) {
+            conversationRepository.findById(slot.getBookedByConversationId()).ifPresent(conversation -> {
+                builder.append("Ứng viên: ").append(conversation.getCandidateName()).append('\n');
+                builder.append("Vị trí: ").append(conversation.getAppliedPosition()).append('\n');
+                builder.append("Điểm CV: ").append(conversation.getCvScore()).append('\n');
+                builder.append("Trạng thái hội thoại: ").append(conversation.getState()).append('\n');
+                if (StringUtils.hasText(conversation.getLastRescheduleReason())) {
+                    builder.append("Lý do đổi lịch gần nhất: ").append(conversation.getLastRescheduleReason()).append('\n');
+                }
+            });
+        }
+        return builder.toString().trim();
+    }
+
+    @Transactional
+    public String editScheduleByHr(Long slotId, String reason, String hrSenderId) {
+        ensureEnabled();
+        if (!StringUtils.hasText(reason)) {
+            throw new IllegalStateException("Reason is required when HR edits a schedule");
+        }
+
+        InterviewSlot slot = slotRepository.findByIdForUpdate(slotId)
+                .orElseThrow(() -> new IllegalStateException("Interview slot not found: " + slotId));
+
+        Long lockedConversationId = slot.getLockedByConversationId();
+        Long bookedConversationId = slot.getBookedByConversationId();
+        slot.markUnavailable(reason.trim());
+
+        if (bookedConversationId != null) {
+            conversationRepository.findById(bookedConversationId).ifPresent(conversation -> {
+                conversation.setSelectedSlotId(null);
+                conversation.setHrDecisionDeadlineAt(null);
+                conversation.setLastRescheduleReason(reason.trim());
+                conversation.setState(InterviewConversationState.RESCHEDULE_REQUESTED);
+                channelMessagingService.sendText(
+                        conversation.getCandidateSenderId(),
+                        "Xin lỗi, lịch phỏng vấn đã cần điều chỉnh do sắp xếp nội bộ. Mình gửi bạn các khung giờ mới để chọn lại."
+                );
+                reOfferSlots(conversation, true);
+            });
+            return "Đã sửa lịch slotId=" + slotId + " và gửi lại luồng đổi lịch cho ứng viên.";
+        }
+
+        if (lockedConversationId != null) {
+            conversationRepository.findById(lockedConversationId).ifPresent(conversation -> {
+                conversation.setLastRescheduleReason(reason.trim());
+                channelMessagingService.sendText(
+                        conversation.getCandidateSenderId(),
+                        "Một khung giờ bạn đang xem vừa được điều chỉnh nội bộ. Mình gửi lại danh sách mới để bạn chọn."
+                );
+                reOfferSlots(conversation, false);
+            });
+            return "Đã sửa lịch slotId=" + slotId + " và cập nhật lại danh sách cho ứng viên đang giữ slot.";
+        }
+
+        return "Đã đánh dấu slotId=" + slotId + " là không khả dụng. Lý do: " + reason.trim();
     }
 
     private void ensureEnabled() {
@@ -413,12 +552,15 @@ public class InterviewSchedulingService {
         conversation.setSelectedSlotId(lockedSlot.getId());
         conversation.setSelectionLockExpiresAt(null);
         conversation.setState(InterviewConversationState.HR_PENDING);
+        conversation.setLastRescheduleReason(null);
+        conversation.setRescheduleSourceState(null);
         conversation.setHrDecisionDeadlineAt(OffsetDateTime.now().plusMinutes(properties.hrResponseTimeoutMinutes()));
 
         HrInterviewNotification notification = new HrInterviewNotification();
         notification.setConversationId(conversation.getId());
         notification.setHrRecipientId(resolveHrRecipientId(conversation.getCandidateSenderId()));
         notification.setInterviewSlotId(lockedSlot.getId());
+        notification.setNotificationKind(HrInterviewNotificationKind.BOOKING_CONFIRMATION);
         notification.setStatus(HrInterviewNotificationStatus.PENDING);
         notification.setSentAt(OffsetDateTime.now());
         notification.setResponseDeadlineAt(conversation.getHrDecisionDeadlineAt());
@@ -461,6 +603,83 @@ public class InterviewSchedulingService {
                 notification.getHrRecipientId(),
                 "Đã yêu cầu ứng viên chọn lại lịch cho mã " + conversation.getId() + "."
         );
+    }
+
+    private void initiateCandidateRescheduleRequest(InterviewConversation conversation) {
+        conversation.setRescheduleSourceState(conversation.getState());
+        conversation.setState(InterviewConversationState.AWAITING_RESCHEDULE_REASON);
+        channelMessagingService.sendText(
+                conversation.getCandidateSenderId(),
+                "Mình đã nhận yêu cầu đổi lịch. Bạn vui lòng cho biết lý do đổi lịch để mình gửi HR duyệt."
+        );
+    }
+
+    private void captureCandidateRescheduleReason(InterviewConversation conversation, String reason) {
+        if (!StringUtils.hasText(reason) || isRescheduleRequest(reason)) {
+            channelMessagingService.sendText(
+                    conversation.getCandidateSenderId(),
+                    "Bạn vui lòng nêu rõ lý do đổi lịch, ví dụ: bận họp đột xuất, trùng lịch công việc, hoặc lý do cá nhân."
+            );
+            return;
+        }
+
+        cancelPendingNotifications(conversation.getId());
+        conversation.setLastRescheduleReason(reason.trim());
+        conversation.setState(InterviewConversationState.HR_RESCHEDULE_REVIEW);
+
+        HrInterviewNotification notification = new HrInterviewNotification();
+        notification.setConversationId(conversation.getId());
+        notification.setHrRecipientId(resolveHrRecipientId(conversation.getCandidateSenderId()));
+        notification.setInterviewSlotId(conversation.getSelectedSlotId());
+        notification.setNotificationKind(HrInterviewNotificationKind.CANDIDATE_RESCHEDULE_REQUEST);
+        notification.setStatus(HrInterviewNotificationStatus.PENDING);
+        notification.setSentAt(OffsetDateTime.now());
+        notification.setResponseDeadlineAt(OffsetDateTime.now().plusMinutes(properties.hrResponseTimeoutMinutes()));
+        notification.setMessageBody(buildCandidateRescheduleRequestMessage(conversation));
+        notificationRepository.save(notification);
+
+        channelMessagingService.sendText(
+                conversation.getCandidateSenderId(),
+                "Mình đã gửi yêu cầu đổi lịch của bạn tới HR. Khi HR duyệt, mình sẽ gửi danh sách lịch mới để bạn chọn."
+        );
+        channelMessagingService.sendText(notification.getHrRecipientId(), notification.getMessageBody());
+    }
+
+    private void approveCandidateRescheduleRequest(InterviewConversation conversation, HrInterviewNotification notification) {
+        notification.setStatus(HrInterviewNotificationStatus.RESCHEDULE_REQUESTED);
+        notification.setRespondedAt(OffsetDateTime.now());
+        releaseBookedSlot(conversation);
+        conversation.setSelectedSlotId(null);
+        conversation.setHrDecisionDeadlineAt(null);
+        conversation.setRescheduleSourceState(null);
+        conversation.setState(InterviewConversationState.RESCHEDULE_REQUESTED);
+        reOfferSlots(conversation, true);
+        channelMessagingService.sendText(
+                notification.getHrRecipientId(),
+                "Đã duyệt yêu cầu đổi lịch cho mã " + conversation.getId() + ". Hệ thống đã gửi slot mới cho ứng viên."
+        );
+    }
+
+    private void rejectCandidateRescheduleRequest(InterviewConversation conversation, HrInterviewNotification notification) {
+        notification.setStatus(HrInterviewNotificationStatus.REJECTED);
+        notification.setRespondedAt(OffsetDateTime.now());
+        restoreConversationAfterRescheduleDenied(conversation);
+        channelMessagingService.sendText(
+                notification.getHrRecipientId(),
+                "Đã giữ nguyên lịch cũ cho mã " + conversation.getId() + "."
+        );
+        channelMessagingService.sendText(
+                conversation.getCandidateSenderId(),
+                "HR chưa đồng ý đổi lịch ở thời điểm này. Mình đang giữ nguyên lịch phỏng vấn cũ của bạn."
+        );
+    }
+
+    private void restoreConversationAfterRescheduleDenied(InterviewConversation conversation) {
+        InterviewConversationState fallbackState = conversation.getRescheduleSourceState() != null
+                ? conversation.getRescheduleSourceState()
+                : InterviewConversationState.CONFIRMED;
+        conversation.setState(fallbackState);
+        conversation.setRescheduleSourceState(null);
     }
 
     private void reOfferSlots(InterviewConversation conversation, boolean apologizeFirst) {
@@ -564,9 +783,11 @@ public class InterviewSchedulingService {
     }
 
     private String formatSlotLabel(InterviewSlot slot) {
-        return slot.getStartTime().format(SLOT_LABEL_FORMATTER)
+        OffsetDateTime localStart = slot.getStartTime().atZoneSameInstant(DISPLAY_ZONE).toOffsetDateTime();
+        OffsetDateTime localEnd = slot.getEndTime().atZoneSameInstant(DISPLAY_ZONE).toOffsetDateTime();
+        return localStart.format(SLOT_LABEL_FORMATTER)
                 + " - "
-                + slot.getEndTime().toLocalTime();
+                + localEnd.toLocalTime();
     }
 
     private String mapSlotStatus(InterviewSlot slot) {
@@ -574,6 +795,7 @@ public class InterviewSchedulingService {
             case AVAILABLE -> "Con trong";
             case SOFT_LOCKED -> "Dang tam giu";
             case BOOKED -> "Da dat";
+            case UNAVAILABLE -> "Khong kha dung";
         };
     }
 
@@ -586,6 +808,18 @@ public class InterviewSchedulingService {
                 + "Khung gio da chon: " + formatSlotLabel(slot) + "\n"
                 + "Tra loi: XAC NHAN " + conversation.getId() + " hoac DOI LICH " + conversation.getId() + "\n"
                 + "Neu qua " + properties.hrResponseTimeoutMinutes() + " phut khong phan hoi, he thong se tu xac nhan.";
+    }
+
+    private String buildCandidateRescheduleRequestMessage(InterviewConversation conversation) {
+        InterviewSlot slot = slotRepository.findById(conversation.getSelectedSlotId())
+                .orElseThrow(() -> new IllegalStateException("Selected interview slot not found: " + conversation.getSelectedSlotId()));
+        return "Yeu cau duyet doi lich phong van\n"
+                + "Ma: " + conversation.getId() + "\n"
+                + "Ung vien: " + conversation.getCandidateName() + "\n"
+                + "Vi tri: " + conversation.getAppliedPosition() + "\n"
+                + "Khung gio hien tai: " + formatSlotLabel(slot) + "\n"
+                + "Ly do doi lich: " + conversation.getLastRescheduleReason() + "\n"
+                + "Tra loi: DOI LICH " + conversation.getId() + " de duyet doi lich, hoac XAC NHAN " + conversation.getId() + " de giu lich cu.";
     }
 
     private String buildFinalCandidateConfirmation(InterviewConversation conversation) {
@@ -603,6 +837,14 @@ public class InterviewSchedulingService {
             return candidateProfile.getAssignedHrSenderId();
         }
         return properties.hrRecipientId();
+    }
+
+    private void cancelPendingNotifications(Long conversationId) {
+        for (HrInterviewNotification notification :
+                notificationRepository.findAllByConversationIdAndStatus(conversationId, HrInterviewNotificationStatus.PENDING)) {
+            notification.setStatus(HrInterviewNotificationStatus.CANCELLED);
+            notification.setRespondedAt(OffsetDateTime.now());
+        }
     }
 
     private InterviewSchedulingStartResponse toStartResponse(

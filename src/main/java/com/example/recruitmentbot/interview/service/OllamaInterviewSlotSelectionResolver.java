@@ -4,6 +4,8 @@ import com.example.recruitmentbot.interview.config.InterviewSchedulingProperties
 import com.example.recruitmentbot.interview.domain.InterviewSlot;
 import com.example.recruitmentbot.service.OllamaService;
 import java.text.Normalizer;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +21,7 @@ import org.springframework.util.StringUtils;
 public class OllamaInterviewSlotSelectionResolver implements InterviewSlotSelectionResolver {
 
     private static final Logger log = LoggerFactory.getLogger(OllamaInterviewSlotSelectionResolver.class);
+    private static final ZoneId DISPLAY_ZONE = ZoneId.of("Asia/Saigon");
     private static final Pattern NUMBER_PATTERN = Pattern.compile("\\b(\\d{1,2})\\b");
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("H:mm");
 
@@ -77,10 +80,11 @@ public class OllamaInterviewSlotSelectionResolver implements InterviewSlotSelect
         List<Integer> matches = new ArrayList<>();
         for (int index = 0; index < offeredSlots.size(); index++) {
             InterviewSlot slot = offeredSlots.get(index);
-            String dayName = normalize(slot.getStartTime().getDayOfWeek().getDisplayName(java.time.format.TextStyle.FULL, Locale.ENGLISH));
-            String timeText = slot.getStartTime().format(TIME_FORMATTER);
-            String hourText = String.valueOf(slot.getStartTime().getHour());
-            String dayOfMonthText = String.valueOf(slot.getStartTime().getDayOfMonth());
+            OffsetDateTime localStart = slot.getStartTime().atZoneSameInstant(DISPLAY_ZONE).toOffsetDateTime();
+            String dayName = normalize(localStart.getDayOfWeek().getDisplayName(java.time.format.TextStyle.FULL, Locale.ENGLISH));
+            String timeText = localStart.format(TIME_FORMATTER);
+            String hourText = String.valueOf(localStart.getHour());
+            String dayOfMonthText = String.valueOf(localStart.getDayOfMonth());
             boolean dayMatch = normalized.contains(dayName) || normalized.contains(dayOfMonthText + "/");
             boolean timeMatch = normalized.contains(timeText) || normalized.contains(hourText + "h");
             if (dayMatch && timeMatch) {
