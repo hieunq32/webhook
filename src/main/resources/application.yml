@@ -28,6 +28,14 @@ facebook:
   verify-token: your-facebook-verify-token
   page-access-token: your-facebook-page-access-token
   send-api-url: https://graph.facebook.com/v23.0/me/messages
+  hr:
+    enabled: ${FACEBOOK_HR_CONSOLE_ENABLED:true}
+  job-posting:
+    enabled: ${FACEBOOK_JOB_POSTING_ENABLED:true}
+    page-id: ${FACEBOOK_PAGE_ID:1109946045541973}
+    page-access-token: ${FACEBOOK_PAGE_POST_ACCESS_TOKEN:EAAcgcmjJBO0BRtN6fBr2E21XF0gHcsaBvfvKfJh8VUHuwnxGWPq3u7Iqreq4ZAm4sMZADf0lXZBB76PQM5reZBRIFBfrg39sB8zqJXCxZB69WFYOU0xn17rcTqgQWbTVVZBaT2Pq5ZCwRg8uAA6rz0FOPwe9Isc31K8bR1tKBLgIXhhwFoWplo9juSCuSoWseoPMZBTZCuIsoKZBJwxllgVyKb9pBzaQZDZD}
+    graph-api-base-url: ${FACEBOOK_GRAPH_API_BASE_URL:https://graph.facebook.com/v23.0}
+    repost-cron: ${FACEBOOK_JOB_REPOST_CRON:0 0 8 ? * MON-FRI}
 
 openai:
   mode: OLLAMA
