@@ -16,6 +16,7 @@ public record InterviewSchedulingProperties(
         @Min(1) int slotOfferCount,
         @Min(1) int softLockMinutes,
         @Min(1) int hrResponseTimeoutMinutes,
+        @Min(1) int councilResponseTimeoutMinutes,
         @NotBlank String slotSelectionPromptTemplate
 ) {
 }

@@ -85,6 +85,7 @@ interview:
   slot-offer-count: ${INTERVIEW_SLOT_OFFER_COUNT:3}
   soft-lock-minutes: ${INTERVIEW_SOFT_LOCK_MINUTES:15}
   hr-response-timeout-minutes: ${INTERVIEW_HR_RESPONSE_TIMEOUT_MINUTES:120}
+  council-response-timeout-minutes: ${INTERVIEW_COUNCIL_RESPONSE_TIMEOUT_MINUTES:360}
   slot-selection-prompt-template: |
     You receive offered interview slots and one candidate reply.
     Decide which single option the candidate means.
