@@ -2,8 +2,12 @@ ALTER TABLE candidate_profile
 ADD COLUMN job_description_id BIGINT;
 
 ALTER TABLE interview_conversation
-ADD COLUMN job_description_id BIGINT,
-ADD COLUMN selected_council_id BIGINT,
+ADD COLUMN job_description_id BIGINT;
+
+ALTER TABLE interview_conversation
+ADD COLUMN selected_council_id BIGINT;
+
+ALTER TABLE interview_conversation
 ADD COLUMN selected_council_sender_id VARCHAR(100);
 
 CREATE TABLE recruitment_council (

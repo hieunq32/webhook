@@ -75,6 +75,79 @@ public class RecruitmentCouncilService {
         return councilRepository.findFirstByRepresentativeSenderIdAndActiveTrue(senderId).orElse(null);
     }
 
+    @Transactional(readOnly = true)
+    public RecruitmentCouncil findActiveCouncilByReference(String reference) {
+        if (!StringUtils.hasText(reference)) {
+            return null;
+        }
+
+        String trimmedReference = reference.trim();
+        RecruitmentCouncil exactCodeMatch = councilRepository.findFirstByCodeIgnoreCase(trimmedReference).orElse(null);
+        if (exactCodeMatch != null && exactCodeMatch.isActive()) {
+            return exactCodeMatch;
+        }
+
+        RecruitmentCouncil exactNameMatch = councilRepository.findFirstByNameIgnoreCase(trimmedReference).orElse(null);
+        if (exactNameMatch != null && exactNameMatch.isActive()) {
+            return exactNameMatch;
+        }
+
+        String normalizedReference = normalizeCouncilReference(trimmedReference);
+        String compactReference = compactCouncilReference(trimmedReference);
+        for (RecruitmentCouncil council : councilRepository.findAll()) {
+            if (!council.isActive()) {
+                continue;
+            }
+            String normalizedCode = normalizeCouncilReference(council.getCode());
+            String normalizedName = normalizeCouncilReference(council.getName());
+            String compactCode = compactCouncilReference(council.getCode());
+            String compactName = compactCouncilReference(council.getName());
+            if (normalizedReference.equals(normalizedCode)
+                    || compactReference.equals(compactCode)
+                    || normalizedReference.equals(normalizedName)
+                    || compactReference.equals(compactName)
+                    || normalizedName.contains(normalizedReference)) {
+                return council;
+            }
+        }
+        return null;
+    }
+
+    @Transactional
+    public void ensureCouncilMappedToJob(Long jobDescriptionId, RecruitmentCouncil council) {
+        if (jobDescriptionId == null || council == null) {
+            return;
+        }
+        boolean exists = jobCouncilRepository.findAllByJobDescriptionId(jobDescriptionId).stream()
+                .anyMatch(link -> council.getId().equals(link.getCouncilId()));
+        if (exists) {
+            return;
+        }
+        JobDescriptionCouncil link = new JobDescriptionCouncil();
+        link.setJobDescriptionId(jobDescriptionId);
+        link.setCouncilId(council.getId());
+        jobCouncilRepository.save(link);
+    }
+
+    @Transactional(readOnly = true)
+    public String buildActiveCouncilSummary() {
+        List<RecruitmentCouncil> activeCouncils = councilRepository.findAll().stream()
+                .filter(RecruitmentCouncil::isActive)
+                .sorted((left, right) -> left.getName().compareToIgnoreCase(right.getName()))
+                .toList();
+        if (activeCouncils.isEmpty()) {
+            return "Hien tai khong co Hoi dong active trong he thong.";
+        }
+
+        StringBuilder builder = new StringBuilder("Danh sach Hoi dong:\n");
+        for (RecruitmentCouncil council : activeCouncils) {
+            builder.append("Ma HD: ").append(council.getCode())
+                    .append(" | Ten: ").append(council.getName())
+                    .append('\n');
+        }
+        return builder.toString().trim();
+    }
+
     @Transactional
     public CouncilHiringRequest createHiringRequest(PageAdminAccount councilAccount, String content) {
         RecruitmentCouncil council = councilRepository.findFirstByRepresentativeSenderIdAndActiveTrue(councilAccount.getSenderId())
@@ -200,6 +273,18 @@ public class RecruitmentCouncilService {
     private String normalizeAccents(String value) {
         String normalized = Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFD);
         return normalized.replaceAll("\\p{M}", "");
+    }
+
+    private String normalizeCouncilReference(String value) {
+        return normalizeAccents(value)
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    private String compactCouncilReference(String value) {
+        return normalizeCouncilReference(value).replace(" ", "");
     }
 
     private record CouncilRef(String code, String name) {

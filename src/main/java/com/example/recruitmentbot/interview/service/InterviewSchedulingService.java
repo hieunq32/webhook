@@ -21,6 +21,7 @@ import com.example.recruitmentbot.jobposting.domain.JobDescription;
 import com.example.recruitmentbot.jobposting.repository.JobDescriptionRepository;
 import com.example.recruitmentbot.hradmin.service.PageAdminAccountService;
 import jakarta.transaction.Transactional;
+import java.text.Normalizer;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -47,16 +48,20 @@ public class InterviewSchedulingService {
             EnumSet.of(
                     InterviewConversationState.AWAITING_SLOT_SELECTION,
                     InterviewConversationState.HR_PENDING,
+                    InterviewConversationState.AWAITING_COUNCIL_ASSIGNMENT,
                     InterviewConversationState.AWAITING_RESCHEDULE_REASON,
                     InterviewConversationState.HR_RESCHEDULE_REVIEW,
                     InterviewConversationState.COUNCIL_PENDING,
+                    InterviewConversationState.CANDIDATE_REVIEWING_COUNCIL_SLOT,
                     InterviewConversationState.RESCHEDULE_REQUESTED
             );
     private static final EnumSet<InterviewConversationState> RESCHEDULABLE_CANDIDATE_STATES =
             EnumSet.of(
                     InterviewConversationState.CONFIRMED,
                     InterviewConversationState.HR_PENDING,
+                    InterviewConversationState.AWAITING_COUNCIL_ASSIGNMENT,
                     InterviewConversationState.COUNCIL_PENDING,
+                    InterviewConversationState.CANDIDATE_REVIEWING_COUNCIL_SLOT,
                     InterviewConversationState.COUNCIL_REJECTED
             );
 
@@ -290,10 +295,24 @@ public class InterviewSchedulingService {
         }
 
         InterviewConversation conversation = conversationOptional.get();
+        if (conversation.getState() == InterviewConversationState.CANDIDATE_REVIEWING_COUNCIL_SLOT) {
+            handleCandidateCouncilSlotReply(conversation, messageText);
+            return true;
+        }
+
         if (conversation.getState() == InterviewConversationState.HR_PENDING && !isRescheduleRequest(messageText)) {
             channelMessagingService.sendText(
                     senderId,
                     "MÃ¬nh Ä‘Ã£ giá»¯ lá»‹ch báº¡n chá»n vÃ  Ä‘ang chá» HR xÃ¡c nháº­n. Náº¿u báº¡n muá»‘n Ä‘á»•i lá»‹ch, hÃ£y nháº¯n "
+                            + buildCandidateRescheduleKeywordHint() + "."
+            );
+            return true;
+        }
+
+        if (conversation.getState() == InterviewConversationState.AWAITING_COUNCIL_ASSIGNMENT && !isRescheduleRequest(messageText)) {
+            channelMessagingService.sendText(
+                    senderId,
+                    "HR da xac nhan lich ban chon va he thong dang cho HR phan cong Hoi dong phong van. Neu ban muon doi lich, hay nhan "
                             + buildCandidateRescheduleKeywordHint() + "."
             );
             return true;
@@ -314,6 +333,18 @@ public class InterviewSchedulingService {
             } else {
                 channelMessagingService.sendText(senderId,
                         "Mình đã giữ lịch bạn chọn và đang chờ HR xác nhận. Nếu bạn muốn đổi lịch, hãy nhắn 'đổi lịch'.");
+            }
+            return true;
+        }
+
+        if (conversation.getState() == InterviewConversationState.AWAITING_COUNCIL_ASSIGNMENT) {
+            if (isRescheduleRequest(messageText)) {
+                initiateCandidateRescheduleRequest(conversation);
+            } else {
+                channelMessagingService.sendText(
+                        senderId,
+                        "HR da xac nhan lich ban chon va he thong dang cho HR phan cong Hoi dong phong van. Neu ban muon doi lich, hay nhan 'doi lich'."
+                );
             }
             return true;
         }
@@ -371,6 +402,13 @@ public class InterviewSchedulingService {
             return false;
         }
 
+        if (handleCouncilSlotSelectionIfApplicable(senderId, messageText)) {
+            return true;
+        }
+        if (handleCouncilAssignmentIfApplicable(senderId, messageText)) {
+            return true;
+        }
+
         HrAction action = parseHrAction(messageText);
         if (action == HrAction.NONE) {
             return false;
@@ -405,7 +443,7 @@ public class InterviewSchedulingService {
             }
         } else {
             if (notification.getNotificationKind() == HrInterviewNotificationKind.COUNCIL_INTERVIEW_CONFIRMATION) {
-                rejectByCouncil(conversation, notification);
+                requestCouncilAlternativeSlot(conversation, notification);
             } else if (notification.getNotificationKind() == HrInterviewNotificationKind.CANDIDATE_RESCHEDULE_REQUEST) {
                 approveCandidateRescheduleRequest(conversation, notification);
             } else {
@@ -473,9 +511,7 @@ public class InterviewSchedulingService {
             if (notifyCouncilAfterHrConfirmation(conversation, notification)) {
                 continue;
             }
-            conversation.setState(InterviewConversationState.CONFIRMED);
-            conversation.setHrDecisionDeadlineAt(null);
-            channelMessagingService.sendText(conversation.getCandidateSenderId(), buildFinalCandidateConfirmation(conversation));
+            moveConversationToAwaitingCouncilAssignment(conversation, notification.getHrRecipientId());
             channelMessagingService.sendText(
                     notification.getHrRecipientId(),
                     "Hệ thống đã tự xác nhận lịch phỏng vấn cho mã " + conversation.getId()
@@ -729,8 +765,9 @@ public class InterviewSchedulingService {
             return;
         }
 
-        lockedSlot.book(conversation.getId());
         releaseOtherPresentedSlots(conversation, lockedSlot.getId());
+        OffsetDateTime hrDeadline = OffsetDateTime.now().plusMinutes(properties.hrResponseTimeoutMinutes());
+        lockedSlot.softLock(conversation.getId(), hrDeadline);
         conversation.setSelectedSlotId(lockedSlot.getId());
         conversation.setSelectedCouncilId(null);
         conversation.setSelectedCouncilSenderId(null);
@@ -738,7 +775,7 @@ public class InterviewSchedulingService {
         conversation.setState(InterviewConversationState.HR_PENDING);
         conversation.setLastRescheduleReason(null);
         conversation.setRescheduleSourceState(null);
-        conversation.setHrDecisionDeadlineAt(OffsetDateTime.now().plusMinutes(properties.hrResponseTimeoutMinutes()));
+        conversation.setHrDecisionDeadlineAt(hrDeadline);
 
         HrInterviewNotification notification = new HrInterviewNotification();
         notification.setConversationId(conversation.getId());
@@ -760,8 +797,6 @@ public class InterviewSchedulingService {
     }
 
     private void confirmByHr(InterviewConversation conversation, HrInterviewNotification notification) {
-        conversation.setState(InterviewConversationState.CONFIRMED);
-        conversation.setHrDecisionDeadlineAt(null);
         notification.setStatus(HrInterviewNotificationStatus.CONFIRMED);
         notification.setRespondedAt(OffsetDateTime.now());
 
@@ -772,10 +807,7 @@ public class InterviewSchedulingService {
         if (notifyCouncilAfterHrConfirmation(conversation, notification)) {
             return;
         }
-        channelMessagingService.sendText(
-                conversation.getCandidateSenderId(),
-                buildFinalCandidateConfirmation(conversation)
-        );
+        moveConversationToAwaitingCouncilAssignment(conversation, notification.getHrRecipientId());
     }
 
     private boolean notifyCouncilAfterHrConfirmation(InterviewConversation conversation, HrInterviewNotification sourceNotification) {
@@ -783,36 +815,12 @@ public class InterviewSchedulingService {
         if (councils.isEmpty()) {
             return false;
         }
-
-        InterviewSlot slot = slotRepository.findById(conversation.getSelectedSlotId())
-                .orElseThrow(() -> new IllegalStateException("Selected interview slot not found: " + conversation.getSelectedSlotId()));
-        conversation.setState(InterviewConversationState.COUNCIL_PENDING);
-        conversation.setHrDecisionDeadlineAt(OffsetDateTime.now().plusMinutes(properties.councilResponseTimeoutMinutes()));
-
-        for (RecruitmentCouncil council : councils) {
-            HrInterviewNotification councilNotification = new HrInterviewNotification();
-            councilNotification.setConversationId(conversation.getId());
-            councilNotification.setHrRecipientId(council.getRepresentativeSenderId());
-            councilNotification.setInterviewSlotId(slot.getId());
-            councilNotification.setNotificationKind(HrInterviewNotificationKind.COUNCIL_INTERVIEW_CONFIRMATION);
-            councilNotification.setStatus(HrInterviewNotificationStatus.PENDING);
-            councilNotification.setSentAt(OffsetDateTime.now());
-            councilNotification.setResponseDeadlineAt(conversation.getHrDecisionDeadlineAt());
-            councilNotification.setMessageBody(buildCouncilInterviewConfirmationMessage(conversation, slot, council));
-            notificationRepository.save(councilNotification);
-            channelMessagingService.sendText(council.getRepresentativeSenderId(), councilNotification.getMessageBody());
-        }
-
-        channelMessagingService.sendText(
-                conversation.getCandidateSenderId(),
-                "HR da xac nhan lich ban chon. He thong dang gui lich cho Hoi dong phong van xac nhan lan cuoi."
+        dispatchCouncilConfirmationRequests(
+                conversation,
+                councils,
+                sourceNotification == null ? null : sourceNotification.getHrRecipientId(),
+                false
         );
-        if (sourceNotification != null) {
-            channelMessagingService.sendText(
-                    sourceNotification.getHrRecipientId(),
-                    "Da gui lich phong van cho Hoi dong xac nhan. Ma: " + conversation.getId()
-            );
-        }
         return true;
     }
 
@@ -822,6 +830,7 @@ public class InterviewSchedulingService {
             return;
         }
         RecruitmentCouncil council = recruitmentCouncilService.findByRepresentativeSenderId(notification.getHrRecipientId());
+        bookSelectedSlotForFinalConfirmation(conversation);
         conversation.setSelectedCouncilId(council == null ? null : council.getId());
         conversation.setSelectedCouncilSenderId(notification.getHrRecipientId());
         conversation.setState(InterviewConversationState.CONFIRMED);
@@ -850,7 +859,7 @@ public class InterviewSchedulingService {
                 "Tat ca Hoi dong da tu choi lich ma " + conversation.getId() + ". Noi bo cong ty co viec ban, vui long lam viec lai voi ung vien neu can dat lich moi.");
         channelMessagingService.sendText(
                 conversation.getCandidateSenderId(),
-                "Noi bo cong ty co viec ban. Neu ban muon dat lich phong van lai, hay nhan 'doi lich', 'doi khung gio', 'gio khac', 'ngay khac' hoac 'hom khac'."
+                "Xin loi ban, Khung gio do hoi dong ban. Hay request cho HR dat lich."
         );
     }
 
@@ -861,6 +870,219 @@ public class InterviewSchedulingService {
             return;
         }
         rejectByCouncil(conversation, notification);
+    }
+
+    private void requestCouncilAlternativeSlot(InterviewConversation conversation, HrInterviewNotification notification) {
+        if (conversation.getState() != InterviewConversationState.COUNCIL_PENDING) {
+            channelMessagingService.sendText(notification.getHrRecipientId(), "Lich nay khong con cho Hoi dong doi lich.");
+            return;
+        }
+        releaseBookedSlot(conversation);
+        conversation.setSelectedSlotId(null);
+        conversation.setState(InterviewConversationState.COUNCIL_SELECTING_SLOT);
+        conversation.setHrDecisionDeadlineAt(OffsetDateTime.now().plusMinutes(properties.councilResponseTimeoutMinutes()));
+        notification.setResponseDeadlineAt(conversation.getHrDecisionDeadlineAt());
+
+        List<InterviewSlot> offeredSlots = reserveFreshSlots(conversation, conversation.getDepartment());
+        RecruitmentCouncil council = recruitmentCouncilService.findByRepresentativeSenderId(notification.getHrRecipientId());
+        conversation.setSelectedCouncilId(council == null ? null : council.getId());
+        conversation.setSelectedCouncilSenderId(notification.getHrRecipientId());
+        conversation.setState(InterviewConversationState.COUNCIL_SELECTING_SLOT);
+
+        channelMessagingService.sendText(
+                notification.getHrRecipientId(),
+                "Chon khung gio moi de de xuat cho ung vien ma " + conversation.getId() + ":\n\n"
+                        + formatSlotOptions(offeredSlots)
+                        + "\n\nTra loi bang so thu tu, ngay hoac gio."
+        );
+        channelMessagingService.sendText(
+                conversation.getCandidateSenderId(),
+                "Hoi dong phong van dang de xuat khung gio khac. Minh se gui ban slot moi ngay khi Hoi dong chon xong."
+        );
+    }
+
+    private boolean handleCouncilAssignmentIfApplicable(String senderId, String messageText) {
+        List<InterviewConversation> awaitingConversations = findAwaitingCouncilAssignmentConversationsForHr(senderId);
+        CouncilAssignmentChoice choice = parseCouncilAssignmentChoice(messageText);
+        if (choice == null && !awaitingConversations.isEmpty()) {
+            RecruitmentCouncil quickCouncil = recruitmentCouncilService.findActiveCouncilByReference(messageText);
+            if (quickCouncil != null) {
+                choice = new CouncilAssignmentChoice(messageText.trim(), null);
+            }
+        }
+        if (choice == null) {
+            return false;
+        }
+        CouncilAssignmentChoice resolvedChoice = choice;
+
+        if (awaitingConversations.isEmpty()) {
+            channelMessagingService.sendText(
+                    senderId,
+                    "Khong co lich nao dang cho ban chon Hoi dong phong van."
+            );
+            return true;
+        }
+
+        if (resolvedChoice.conversationId() == null && awaitingConversations.size() > 1) {
+            channelMessagingService.sendText(
+                    senderId,
+                    "Ban dang co nhieu lich cho chon Hoi dong. Hay tra loi theo mau: CHON HD <ma-hoi-dong> <ma-cuoc-hen>."
+            );
+            return true;
+        }
+
+        InterviewConversation conversation = awaitingConversations.stream()
+                .filter(item -> resolvedChoice.conversationId() == null || resolvedChoice.conversationId().equals(item.getId()))
+                .findFirst()
+                .orElse(null);
+        if (conversation == null) {
+            channelMessagingService.sendText(
+                    senderId,
+                    "Khong tim thay lich dang cho chon Hoi dong voi ma " + resolvedChoice.conversationId() + "."
+            );
+            return true;
+        }
+
+        RecruitmentCouncil council = recruitmentCouncilService.findActiveCouncilByReference(resolvedChoice.councilReference());
+        if (council == null) {
+            channelMessagingService.sendText(
+                    senderId,
+                    "Khong tim thay Hoi dong '" + resolvedChoice.councilReference() + "'.\n"
+                            + recruitmentCouncilService.buildActiveCouncilSummary()
+                            + "\nTra loi: CHON HD <ma-hoi-dong> " + conversation.getId()
+            );
+            return true;
+        }
+
+        assignCouncilAndContinue(conversation, senderId, council);
+        return true;
+    }
+
+    private boolean handleCouncilSlotSelectionIfApplicable(String senderId, String messageText) {
+        List<HrInterviewNotification> pendingNotifications =
+                notificationRepository.findAllByHrRecipientIdAndStatusOrderBySentAtDesc(
+                        senderId,
+                        HrInterviewNotificationStatus.PENDING
+                );
+        if (pendingNotifications.isEmpty()) {
+            return false;
+        }
+
+        Long conversationId = parseConversationReference(messageText);
+        for (HrInterviewNotification notification : pendingNotifications) {
+            if (notification.getNotificationKind() != HrInterviewNotificationKind.COUNCIL_INTERVIEW_CONFIRMATION) {
+                continue;
+            }
+            if (conversationId != null && !conversationId.equals(notification.getConversationId())) {
+                continue;
+            }
+            Optional<InterviewConversation> conversationOptional = conversationRepository.findById(notification.getConversationId());
+            if (conversationOptional.isEmpty()
+                    || conversationOptional.get().getState() != InterviewConversationState.COUNCIL_SELECTING_SLOT) {
+                continue;
+            }
+            handleCouncilSlotChoice(conversationOptional.get(), notification, messageText);
+            return true;
+        }
+        return false;
+    }
+
+    private void handleCouncilSlotChoice(
+            InterviewConversation conversation,
+            HrInterviewNotification notification,
+            String messageText
+    ) {
+        List<InterviewSlot> offeredSlots = getPresentedSlots(conversation);
+        if (offeredSlots.isEmpty()) {
+            requestCouncilAlternativeSlot(conversation, notification);
+            return;
+        }
+
+        InterviewSlotSelectionResolver.Resolution resolution = slotSelectionResolver.resolve(messageText, offeredSlots);
+        if (resolution.type() != InterviewSlotSelectionResolver.ResolutionType.SELECTED) {
+            channelMessagingService.sendText(
+                    notification.getHrRecipientId(),
+                    "Chua xac dinh duoc khung gio moi. Hay tra loi bang so thu tu, ngay hoac gio trong danh sach:\n\n"
+                            + formatSlotOptions(offeredSlots)
+            );
+            return;
+        }
+
+        Integer optionNumber = resolution.optionNumber();
+        if (optionNumber == null || optionNumber < 1 || optionNumber > offeredSlots.size()) {
+            channelMessagingService.sendText(notification.getHrRecipientId(), "Lua chon khung gio khong hop le.");
+            return;
+        }
+
+        InterviewSlot chosen = offeredSlots.get(optionNumber - 1);
+        InterviewSlot lockedSlot = slotRepository.findByIdForUpdate(chosen.getId())
+                .orElseThrow(() -> new IllegalStateException("Interview slot not found: " + chosen.getId()));
+        if (lockedSlot.getStatus() != InterviewSlotStatus.SOFT_LOCKED
+                || !conversation.getId().equals(lockedSlot.getLockedByConversationId())) {
+            requestCouncilAlternativeSlot(conversation, notification);
+            return;
+        }
+
+        releaseOtherPresentedSlots(conversation, lockedSlot.getId());
+        OffsetDateTime candidateDeadline = OffsetDateTime.now().plusMinutes(properties.hrResponseTimeoutMinutes());
+        lockedSlot.softLock(conversation.getId(), candidateDeadline);
+        conversation.setSelectedSlotId(lockedSlot.getId());
+        conversation.setState(InterviewConversationState.CANDIDATE_REVIEWING_COUNCIL_SLOT);
+        conversation.setSelectionLockExpiresAt(null);
+        conversation.setHrDecisionDeadlineAt(candidateDeadline);
+        notification.setInterviewSlotId(lockedSlot.getId());
+        notification.setResponseDeadlineAt(candidateDeadline);
+
+        channelMessagingService.sendText(
+                conversation.getCandidateSenderId(),
+                "Slot do hoi dong phong van ban. Ban co the doi sang slot nay khong?\n"
+                        + formatSlotLabel(lockedSlot)
+                        + "\n\nTra loi: DONG Y " + conversation.getId() + " hoac DOI LICH " + conversation.getId() + "."
+        );
+        channelMessagingService.sendText(
+                notification.getHrRecipientId(),
+                "Da gui slot moi cho ung vien xac nhan. Ma: " + conversation.getId()
+        );
+    }
+
+    private void handleCandidateCouncilSlotReply(InterviewConversation conversation, String messageText) {
+        if (isCandidateAcceptsProposedSlot(messageText)) {
+            HrInterviewNotification notification = findPendingCouncilNotification(conversation)
+                    .orElse(null);
+            bookSelectedSlotForFinalConfirmation(conversation);
+            if (notification != null) {
+                RecruitmentCouncil council = recruitmentCouncilService.findByRepresentativeSenderId(notification.getHrRecipientId());
+                conversation.setSelectedCouncilId(council == null ? null : council.getId());
+                conversation.setSelectedCouncilSenderId(notification.getHrRecipientId());
+                notification.setStatus(HrInterviewNotificationStatus.CONFIRMED);
+                notification.setRespondedAt(OffsetDateTime.now());
+                cancelOtherCouncilNotifications(conversation.getId(), notification.getId());
+                channelMessagingService.sendText(
+                        notification.getHrRecipientId(),
+                        "Ung vien da dong y slot moi. Lich phong van ma " + conversation.getId() + " da duoc dat."
+                );
+                channelMessagingService.sendText(
+                        resolveHrRecipientId(conversation.getCandidateSenderId()),
+                        "Ung vien da dong y slot Hoi dong de xuat. Lich phong van ma " + conversation.getId() + " da duoc dat."
+                );
+            }
+            conversation.setState(InterviewConversationState.CONFIRMED);
+            conversation.setHrDecisionDeadlineAt(null);
+            channelMessagingService.sendText(conversation.getCandidateSenderId(), buildFinalCandidateConfirmation(conversation));
+            return;
+        }
+
+        if (isRescheduleRequest(messageText) || isCandidateRejectsProposedSlot(messageText)) {
+            initiateCandidateRescheduleRequest(conversation);
+            return;
+        }
+
+        channelMessagingService.sendText(
+                conversation.getCandidateSenderId(),
+                "Ban vui long tra loi DONG Y " + conversation.getId()
+                        + " neu chap nhan slot Hoi dong de xuat, hoac DOI LICH "
+                        + conversation.getId() + " neu muon chon khung gio khac."
+        );
     }
 
     private void requestReschedule(InterviewConversation conversation, HrInterviewNotification notification) {
@@ -1005,13 +1227,49 @@ public class InterviewSchedulingService {
             return;
         }
         slotRepository.findByIdForUpdate(conversation.getSelectedSlotId()).ifPresent(slot -> {
-            if (slot.getStatus() == InterviewSlotStatus.BOOKED
-                    && conversation.getId().equals(slot.getBookedByConversationId())) {
+            boolean bookedByConversation = conversation.getId().equals(slot.getBookedByConversationId());
+            boolean lockedByConversation = conversation.getId().equals(slot.getLockedByConversationId());
+            if (bookedByConversation || lockedByConversation) {
                 slot.setBookedByConversationId(null);
                 slot.setBookedAt(null);
                 slot.release();
             }
         });
+    }
+
+    private void extendSelectedSlotHold(InterviewConversation conversation, OffsetDateTime holdUntil) {
+        if (conversation.getSelectedSlotId() == null) {
+            return;
+        }
+        slotRepository.findByIdForUpdate(conversation.getSelectedSlotId()).ifPresent(slot -> {
+            if (slot.getStatus() == InterviewSlotStatus.AVAILABLE) {
+                slot.softLock(conversation.getId(), holdUntil);
+                return;
+            }
+            if (slot.getStatus() == InterviewSlotStatus.SOFT_LOCKED
+                    && conversation.getId().equals(slot.getLockedByConversationId())) {
+                slot.softLock(conversation.getId(), holdUntil);
+            }
+        });
+    }
+
+    private void bookSelectedSlotForFinalConfirmation(InterviewConversation conversation) {
+        if (conversation.getSelectedSlotId() == null) {
+            throw new IllegalStateException("Selected interview slot is required before final confirmation");
+        }
+        InterviewSlot slot = slotRepository.findByIdForUpdate(conversation.getSelectedSlotId())
+                .orElseThrow(() -> new IllegalStateException("Selected interview slot not found: " + conversation.getSelectedSlotId()));
+        boolean alreadyBookedByConversation = slot.getStatus() == InterviewSlotStatus.BOOKED
+                && conversation.getId().equals(slot.getBookedByConversationId());
+        if (alreadyBookedByConversation) {
+            return;
+        }
+        boolean heldByConversation = slot.getStatus() == InterviewSlotStatus.SOFT_LOCKED
+                && conversation.getId().equals(slot.getLockedByConversationId());
+        if (!heldByConversation && slot.getStatus() != InterviewSlotStatus.AVAILABLE) {
+            throw new IllegalStateException("Selected interview slot is no longer available: " + conversation.getSelectedSlotId());
+        }
+        slot.book(conversation.getId());
     }
 
     private List<InterviewSlot> getPresentedSlots(InterviewConversation conversation) {
@@ -1210,6 +1468,128 @@ public class InterviewSchedulingService {
                 + "Chuẩn bị: " + properties.preparationNotes();
     }
 
+    private void moveConversationToAwaitingCouncilAssignment(InterviewConversation conversation, String hrSenderId) {
+        Long resolvedJobDescriptionId = resolveConversationJobDescriptionId(conversation);
+        if (resolvedJobDescriptionId != null) {
+            conversation.setJobDescriptionId(resolvedJobDescriptionId);
+        }
+        conversation.setState(InterviewConversationState.AWAITING_COUNCIL_ASSIGNMENT);
+        conversation.setSelectedCouncilId(null);
+        conversation.setSelectedCouncilSenderId(null);
+        conversation.setHrDecisionDeadlineAt(OffsetDateTime.now().plusMinutes(properties.councilResponseTimeoutMinutes()));
+        extendSelectedSlotHold(conversation, conversation.getHrDecisionDeadlineAt());
+
+        if (resolvedJobDescriptionId == null) {
+            log.warn("HR confirmed interview conversationId={} but no jobDescriptionId could be resolved. candidateSenderId={}, appliedPosition={}",
+                    conversation.getId(),
+                    conversation.getCandidateSenderId(),
+                    conversation.getAppliedPosition());
+        } else {
+            log.warn("HR confirmed interview conversationId={} but no active council mapping was found for jobDescriptionId={}. appliedPosition={}",
+                    conversation.getId(),
+                    resolvedJobDescriptionId,
+                    conversation.getAppliedPosition());
+        }
+
+        channelMessagingService.sendText(
+                conversation.getCandidateSenderId(),
+                "HR da xac nhan lich ban chon. He thong dang cho HR phan cong Hoi dong phong van truoc khi xac nhan cuoi cung."
+        );
+        channelMessagingService.sendText(hrSenderId, buildCouncilAssignmentPrompt(conversation));
+    }
+
+    private String buildCouncilAssignmentPrompt(InterviewConversation conversation) {
+        Long resolvedJobDescriptionId = resolveConversationJobDescriptionId(conversation);
+        StringBuilder builder = new StringBuilder();
+        builder.append("Khong tim thay Hoi dong cho lich phong van ma ").append(conversation.getId()).append(".\n")
+                .append("Ung vien: ").append(conversation.getCandidateName()).append('\n')
+                .append("Vi tri: ").append(conversation.getAppliedPosition()).append('\n');
+        if (resolvedJobDescriptionId != null) {
+            builder.append("JD: ").append(resolvedJobDescriptionId).append('\n');
+        } else {
+            builder.append("JD: chua xac dinh\n");
+        }
+        builder.append(recruitmentCouncilService.buildActiveCouncilSummary()).append('\n')
+                .append("Tra loi: CHON HD <ma-hoi-dong> ").append(conversation.getId());
+        return builder.toString();
+    }
+
+    private List<InterviewConversation> findAwaitingCouncilAssignmentConversationsForHr(String hrSenderId) {
+        return conversationRepository.findAllByStateIn(List.of(InterviewConversationState.AWAITING_COUNCIL_ASSIGNMENT)).stream()
+                .filter(conversation -> hrSenderId.equals(resolveHrRecipientId(conversation.getCandidateSenderId())))
+                .sorted(Comparator.comparing(InterviewConversation::getUpdatedAt).reversed())
+                .toList();
+    }
+
+    private void assignCouncilAndContinue(
+            InterviewConversation conversation,
+            String hrSenderId,
+            RecruitmentCouncil council
+    ) {
+        Long resolvedJobDescriptionId = resolveConversationJobDescriptionId(conversation);
+        if (resolvedJobDescriptionId != null) {
+            conversation.setJobDescriptionId(resolvedJobDescriptionId);
+            recruitmentCouncilService.ensureCouncilMappedToJob(resolvedJobDescriptionId, council);
+        }
+        conversation.setSelectedCouncilId(council.getId());
+        conversation.setSelectedCouncilSenderId(council.getRepresentativeSenderId());
+        dispatchCouncilConfirmationRequests(conversation, List.of(council), hrSenderId, true);
+    }
+
+    private void dispatchCouncilConfirmationRequests(
+            InterviewConversation conversation,
+            List<RecruitmentCouncil> councils,
+            String hrSenderId,
+            boolean assignedByHr
+    ) {
+        InterviewSlot slot = slotRepository.findByIdForUpdate(conversation.getSelectedSlotId())
+                .orElseThrow(() -> new IllegalStateException("Selected interview slot not found: " + conversation.getSelectedSlotId()));
+        OffsetDateTime councilDeadline = OffsetDateTime.now().plusMinutes(properties.councilResponseTimeoutMinutes());
+        if (slot.getStatus() == InterviewSlotStatus.AVAILABLE
+                || (slot.getStatus() == InterviewSlotStatus.SOFT_LOCKED
+                && conversation.getId().equals(slot.getLockedByConversationId()))) {
+            slot.softLock(conversation.getId(), councilDeadline);
+        } else if (slot.getStatus() != InterviewSlotStatus.BOOKED
+                || !conversation.getId().equals(slot.getBookedByConversationId())) {
+            throw new IllegalStateException("Selected interview slot is no longer available for council confirmation: " + conversation.getSelectedSlotId());
+        }
+
+        conversation.setState(InterviewConversationState.COUNCIL_PENDING);
+        conversation.setHrDecisionDeadlineAt(councilDeadline);
+
+        for (RecruitmentCouncil council : councils) {
+            HrInterviewNotification councilNotification = new HrInterviewNotification();
+            councilNotification.setConversationId(conversation.getId());
+            councilNotification.setHrRecipientId(council.getRepresentativeSenderId());
+            councilNotification.setInterviewSlotId(slot.getId());
+            councilNotification.setNotificationKind(HrInterviewNotificationKind.COUNCIL_INTERVIEW_CONFIRMATION);
+            councilNotification.setStatus(HrInterviewNotificationStatus.PENDING);
+            councilNotification.setSentAt(OffsetDateTime.now());
+            councilNotification.setResponseDeadlineAt(councilDeadline);
+            councilNotification.setMessageBody(buildCouncilInterviewConfirmationMessage(conversation, slot, council));
+            notificationRepository.save(councilNotification);
+            channelMessagingService.sendText(council.getRepresentativeSenderId(), councilNotification.getMessageBody());
+        }
+
+        channelMessagingService.sendText(
+                conversation.getCandidateSenderId(),
+                assignedByHr
+                        ? "HR da chon Hoi dong phong van. He thong dang cho Hoi dong xac nhan lan cuoi."
+                        : "HR da xac nhan lich ban chon. He thong dang gui lich cho Hoi dong phong van xac nhan lan cuoi."
+        );
+        if (StringUtils.hasText(hrSenderId)) {
+            String councilLabel = councils.stream()
+                    .map(RecruitmentCouncil::getCode)
+                    .collect(Collectors.joining(", "));
+            channelMessagingService.sendText(
+                    hrSenderId,
+                    assignedByHr
+                            ? "Da gan Hoi dong " + councilLabel + " va gui lich phong van ma " + conversation.getId() + " cho Hoi dong xac nhan."
+                            : "Da gui lich phong van cho Hoi dong xac nhan. Ma: " + conversation.getId()
+            );
+        }
+    }
+
     private String buildCandidateRescheduleKeywordHint() {
         return "'doi lich', 'doi gio', 'gio khac' hoac 'hom khac'";
     }
@@ -1226,19 +1606,105 @@ public class InterviewSchedulingService {
         if (candidateProfile.getJobDescriptionId() != null) {
             return candidateProfile.getJobDescriptionId();
         }
-        return jobDescriptionRepository.findFirstByTitleIgnoreCaseOrderByCreatedAtDesc(candidateProfile.getAppliedPosition())
-                .map(JobDescription::getId)
-                .orElse(null);
+        return findBestMatchingJobDescriptionId(candidateProfile.getAppliedPosition());
     }
 
     private List<RecruitmentCouncil> resolveCouncilsForConversation(InterviewConversation conversation) {
-        Long jobDescriptionId = conversation.getJobDescriptionId();
-        if (jobDescriptionId == null && StringUtils.hasText(conversation.getAppliedPosition())) {
-            jobDescriptionId = jobDescriptionRepository.findFirstByTitleIgnoreCaseOrderByCreatedAtDesc(conversation.getAppliedPosition())
-                    .map(JobDescription::getId)
-                    .orElse(null);
+        Long jobDescriptionId = resolveConversationJobDescriptionId(conversation);
+        if (jobDescriptionId != null && !jobDescriptionId.equals(conversation.getJobDescriptionId())) {
+            conversation.setJobDescriptionId(jobDescriptionId);
         }
-        return jobDescriptionId == null ? List.of() : recruitmentCouncilService.findCouncilsForJob(jobDescriptionId);
+        List<RecruitmentCouncil> councils = jobDescriptionId == null
+                ? List.of()
+                : recruitmentCouncilService.findCouncilsForJob(jobDescriptionId);
+        if (councils.isEmpty()) {
+            log.warn("No councils resolved for conversationId={}, candidateSenderId={}, appliedPosition={}, jobDescriptionId={}",
+                    conversation.getId(),
+                    conversation.getCandidateSenderId(),
+                    conversation.getAppliedPosition(),
+                    jobDescriptionId);
+        }
+        return councils;
+    }
+
+    private Long resolveConversationJobDescriptionId(InterviewConversation conversation) {
+        if (conversation.getJobDescriptionId() != null) {
+            return conversation.getJobDescriptionId();
+        }
+        CandidateProfile candidateProfile =
+                candidateProfileService.getPassedCandidateBySenderId(conversation.getCandidateSenderId());
+        if (candidateProfile != null && candidateProfile.getJobDescriptionId() != null) {
+            return candidateProfile.getJobDescriptionId();
+        }
+        String appliedPosition = candidateProfile != null && StringUtils.hasText(candidateProfile.getAppliedPosition())
+                ? candidateProfile.getAppliedPosition()
+                : conversation.getAppliedPosition();
+        return findBestMatchingJobDescriptionId(appliedPosition);
+    }
+
+    private Long findBestMatchingJobDescriptionId(String appliedPosition) {
+        if (!StringUtils.hasText(appliedPosition)) {
+            return null;
+        }
+
+        Optional<JobDescription> exactMatch =
+                jobDescriptionRepository.findFirstByTitleIgnoreCaseOrderByCreatedAtDesc(appliedPosition.trim());
+        if (exactMatch.isPresent()) {
+            return exactMatch.get().getId();
+        }
+
+        String normalizedTarget = normalizeLookupValue(appliedPosition);
+        JobDescription bestMatch = null;
+        int bestScore = 0;
+
+        for (JobDescription jobDescription : jobDescriptionRepository.findAll()) {
+            int score = scoreJobTitleMatch(normalizedTarget, normalizeLookupValue(jobDescription.getTitle()));
+            if (score > bestScore
+                    || (score == bestScore
+                    && score > 0
+                    && bestMatch != null
+                    && jobDescription.getCreatedAt().isAfter(bestMatch.getCreatedAt()))) {
+                bestMatch = jobDescription;
+                bestScore = score;
+            }
+        }
+
+        return bestMatch == null ? null : bestMatch.getId();
+    }
+
+    private int scoreJobTitleMatch(String normalizedTarget, String normalizedTitle) {
+        if (!StringUtils.hasText(normalizedTarget) || !StringUtils.hasText(normalizedTitle)) {
+            return 0;
+        }
+        if (normalizedTitle.equals(normalizedTarget)) {
+            return 1_000;
+        }
+        if (normalizedTitle.contains(normalizedTarget) || normalizedTarget.contains(normalizedTitle)) {
+            return 700 + Math.min(normalizedTarget.length(), normalizedTitle.length());
+        }
+
+        int score = 0;
+        for (String token : normalizedTarget.split("\\s+")) {
+            if (token.length() < 2) {
+                continue;
+            }
+            if (normalizedTitle.contains(token)) {
+                score += 100;
+            }
+        }
+        return score;
+    }
+
+    private String normalizeLookupValue(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        String normalized = Normalizer.normalize(value, Normalizer.Form.NFD);
+        normalized = normalized.replaceAll("\\p{M}", "");
+        normalized = normalized.replace('\u0111', 'd').replace('\u0110', 'D');
+        normalized = normalized.toLowerCase(Locale.ROOT);
+        normalized = normalized.replaceAll("[^a-z0-9\\s]", " ");
+        return normalized.replaceAll("\\s+", " ").trim();
     }
 
     private boolean hasOtherPendingCouncilNotifications(Long conversationId) {
@@ -1247,6 +1713,16 @@ public class InterviewSchedulingService {
                 HrInterviewNotificationKind.COUNCIL_INTERVIEW_CONFIRMATION,
                 HrInterviewNotificationStatus.PENDING
         ).stream().findAny().isPresent();
+    }
+
+    private Optional<HrInterviewNotification> findPendingCouncilNotification(InterviewConversation conversation) {
+        return notificationRepository.findAllByConversationIdAndNotificationKindAndStatus(
+                        conversation.getId(),
+                        HrInterviewNotificationKind.COUNCIL_INTERVIEW_CONFIRMATION,
+                        HrInterviewNotificationStatus.PENDING
+                )
+                .stream()
+                .findFirst();
     }
 
     private void cancelOtherCouncilNotifications(Long conversationId, Long acceptedNotificationId) {
@@ -1260,6 +1736,30 @@ public class InterviewSchedulingService {
                 notification.setRespondedAt(OffsetDateTime.now());
             }
         }
+    }
+
+    private boolean isCandidateAcceptsProposedSlot(String messageText) {
+        String normalized = normalize(messageText);
+        if (isCandidateRejectsProposedSlot(messageText)) {
+            return false;
+        }
+        return normalized.equals("1")
+                || normalized.contains("dong y")
+                || normalized.contains("duoc")
+                || normalized.contains("ok")
+                || normalized.contains("okay")
+                || normalized.contains("xac nhan")
+                || normalized.contains("confirm")
+                || normalized.contains("yes");
+    }
+
+    private boolean isCandidateRejectsProposedSlot(String messageText) {
+        String normalized = normalize(messageText);
+        return normalized.contains("khong")
+                || normalized.contains("chua duoc")
+                || normalized.contains("khong duoc")
+                || normalized.contains("not ok")
+                || normalized.contains("no ");
     }
 
     private void cancelPendingNotifications(Long conversationId) {
@@ -1334,6 +1834,88 @@ public class InterviewSchedulingService {
         return null;
     }
 
+    private CouncilAssignmentChoice parseCouncilAssignmentChoice(String messageText) {
+        if (!StringUtils.hasText(messageText)) {
+            return null;
+        }
+
+        String normalized = normalize(messageText);
+        if (!looksLikeCouncilAssignment(normalized)) {
+            return null;
+        }
+
+        List<String> tokens = new ArrayList<>(java.util.Arrays.asList(normalized.split(" ")));
+        if (tokens.isEmpty()) {
+            return null;
+        }
+
+        Long conversationId = null;
+        if (tokens.get(tokens.size() - 1).matches("\\d+")) {
+            conversationId = Long.parseLong(tokens.remove(tokens.size() - 1));
+        }
+
+        while (!tokens.isEmpty() && isCouncilAssignmentTrailingToken(tokens.get(tokens.size() - 1))) {
+            tokens.remove(tokens.size() - 1);
+        }
+
+        while (!tokens.isEmpty() && isCouncilAssignmentLeadingToken(tokens.get(0))) {
+            tokens.remove(0);
+        }
+
+        if (tokens.size() >= 2 && "hoi".equals(tokens.get(0)) && "dong".equals(tokens.get(1))) {
+            tokens.remove(0);
+            tokens.remove(0);
+        } else if (!tokens.isEmpty() && "hd".equals(tokens.get(0))) {
+            tokens.remove(0);
+        }
+
+        while (!tokens.isEmpty() && isCouncilAssignmentLeadingToken(tokens.get(0))) {
+            tokens.remove(0);
+        }
+        while (!tokens.isEmpty() && isCouncilAssignmentTrailingToken(tokens.get(tokens.size() - 1))) {
+            tokens.remove(tokens.size() - 1);
+        }
+
+        String councilReference = String.join(" ", tokens).trim();
+        return StringUtils.hasText(councilReference)
+                ? new CouncilAssignmentChoice(councilReference, conversationId)
+                : null;
+    }
+
+    private boolean looksLikeCouncilAssignment(String normalizedMessage) {
+        if (!StringUtils.hasText(normalizedMessage)) {
+            return false;
+        }
+        return normalizedMessage.startsWith("chon ")
+                || normalizedMessage.startsWith("gan ")
+                || normalizedMessage.startsWith("hoi dong ")
+                || normalizedMessage.startsWith("hd ")
+                || normalizedMessage.contains(" vao lich ")
+                || normalizedMessage.contains(" cho lich ")
+                || normalizedMessage.contains(" cho ma ")
+                || normalizedMessage.contains(" vao ma ");
+    }
+
+    private boolean isCouncilAssignmentLeadingToken(String token) {
+        return "chon".equals(token)
+                || "gan".equals(token)
+                || "cho".equals(token)
+                || "vao".equals(token)
+                || "lich".equals(token)
+                || "ma".equals(token)
+                || "id".equals(token);
+    }
+
+    private boolean isCouncilAssignmentTrailingToken(String token) {
+        return "cho".equals(token)
+                || "vao".equals(token)
+                || "lich".equals(token)
+                || "ma".equals(token)
+                || "id".equals(token)
+                || "phong".equals(token)
+                || "van".equals(token);
+    }
+
     private String normalize(String value) {
         if (!StringUtils.hasText(value)) {
             return "";
@@ -1350,5 +1932,8 @@ public class InterviewSchedulingService {
         CONFIRM,
         RESCHEDULE,
         NONE
+    }
+
+    private record CouncilAssignmentChoice(String councilReference, Long conversationId) {
     }
 }
