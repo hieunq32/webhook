@@ -25,4 +25,8 @@ public record OpenAiProperties(
     public boolean isOllamaMode() {
         return "OLLAMA".equalsIgnoreCase(mode);
     }
+
+    public boolean isOpenClawMode() {
+        return "OPENCLAW".equalsIgnoreCase(mode);
+    }
 }

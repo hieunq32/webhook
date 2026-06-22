@@ -9,6 +9,8 @@ public record OllamaProperties(
         String systemPrompt,
         String generateApiPath,
         String jobPostModel,
-        String jobPostPromptTemplate
+        String jobPostPromptTemplate,
+        int connectTimeoutSeconds,
+        int readTimeoutSeconds
 ) {
 }

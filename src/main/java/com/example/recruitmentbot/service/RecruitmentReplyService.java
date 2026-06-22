@@ -3,6 +3,7 @@ package com.example.recruitmentbot.service;
 import com.example.recruitmentbot.config.OpenAiProperties;
 import com.example.recruitmentbot.config.OllamaProperties;
 import com.example.recruitmentbot.config.RecruitmentMockProperties;
+import com.example.recruitmentbot.openclaw.service.OpenClawGatewayClient;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -45,6 +46,7 @@ public class RecruitmentReplyService {
     private final OpenAiProperties openAiProperties;
     private final OpenAiService openAiService;
     private final OllamaService ollamaService;
+    private final OpenClawGatewayClient openClawGatewayClient;
     private final OllamaProperties ollamaProperties;
     private final RecruitmentMockProperties mockProperties;
     private final Map<String, CandidateProfile> candidateProfiles = new ConcurrentHashMap<>();
@@ -54,11 +56,13 @@ public class RecruitmentReplyService {
     public RecruitmentReplyService(OpenAiProperties openAiProperties,
                                    OpenAiService openAiService,
                                    OllamaService ollamaService,
+                                   OpenClawGatewayClient openClawGatewayClient,
                                    OllamaProperties ollamaProperties,
                                    RecruitmentMockProperties mockProperties) {
         this.openAiProperties = openAiProperties;
         this.openAiService = openAiService;
         this.ollamaService = ollamaService;
+        this.openClawGatewayClient = openClawGatewayClient;
         this.ollamaProperties = ollamaProperties;
         this.mockProperties = mockProperties;
         initPositionIndex();
@@ -74,6 +78,14 @@ public class RecruitmentReplyService {
             return buildGreetingReply(vietnamese);
         }
         RecruitmentReply mockReply = buildMockReply(candidateMessage, senderId);
+        if (shouldUseOpenClawFallback(candidateMessage, mockReply, normalizedMessage)) {
+            log.info("Routing candidate message to OpenClaw fallback. senderId={}, message={}", senderId, candidateMessage);
+            try {
+                return new RecruitmentReply(openClawGatewayClient.generateRecruitmentReply(buildOllamaPrompt(candidateMessage, senderId), senderId), null);
+            } catch (Exception exception) {
+                log.warn("OpenClaw fallback failed for senderId={}. Continuing with next fallback.", senderId, exception);
+            }
+        }
         if (openAiProperties.isOllamaMode() && shouldUseOllamaFallback(candidateMessage, mockReply)) {
             log.info("Routing candidate message to Ollama fallback. senderId={}, message={}", senderId, candidateMessage);
             try {
@@ -138,6 +150,33 @@ public class RecruitmentReplyService {
             return false;
         }
         return fallbackReply.equals(mockReply.text());
+    }
+
+    private boolean shouldUseOpenClawFallback(String candidateMessage,
+                                              RecruitmentReply mockReply,
+                                              String normalizedMessage) {
+        if (mockReply == null || mockReply.documentUrl() != null) {
+            return false;
+        }
+        if (!(openAiProperties.isOpenClawMode() || openAiProperties.isOllamaMode())) {
+            return false;
+        }
+        if (isLikelyGreeting(normalizedMessage)) {
+            return false;
+        }
+        boolean recruitmentTopic = isRecruitmentTopic(normalizedMessage);
+        boolean structuredSignal = hasStructuredSignal(normalizedMessage);
+        if (!recruitmentTopic && !structuredSignal) {
+            return false;
+        }
+        boolean vietnamese = isVietnamese(candidateMessage);
+        String fallbackReply = vietnamese
+                ? safe(mockProperties.vietnameseFallbackReply())
+                : safe(mockProperties.englishFallbackReply());
+        String outOfScopeReply = vietnamese
+                ? safe(mockProperties.vietnameseReplyForOutOfScope())
+                : safe(mockProperties.englishReplyForOutOfScope());
+        return fallbackReply.equals(mockReply.text()) && !outOfScopeReply.equals(mockReply.text());
     }
 
     private RecruitmentReply buildMockReply(String candidateMessage, String senderId) {

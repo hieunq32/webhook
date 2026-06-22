@@ -52,6 +52,8 @@ ollama:
   model: ${OLLAMA_MODEL:qwen2.5:3b}
   generate-api-path: ${OLLAMA_GENERATE_API_PATH:/api/generate}
   job-post-model: ${OLLAMA_JOB_POST_MODEL:${OLLAMA_MODEL:qwen2.5:3b}}
+  connect-timeout-seconds: ${OLLAMA_CONNECT_TIMEOUT_SECONDS:10}
+  read-timeout-seconds: ${OLLAMA_READ_TIMEOUT_SECONDS:120}
   system-prompt: >
     You are a recruitment assistant for a company's hiring team.
     Reply in Vietnamese when the candidate writes in Vietnamese.
@@ -75,6 +77,26 @@ ollama:
     Dia diem: {{location}}
     Hinh thuc lam viec: {{workType}}
     Trang thai: {{status}}
+
+openclaw:
+  enabled: ${OPENCLAW_ENABLED:true}
+  base-url: ${OPENCLAW_BASE_URL:http://127.0.0.1:18889}
+  gateway-token: ${OPENCLAW_GATEWAY_TOKEN:}
+  default-model: ${OPENCLAW_DEFAULT_MODEL:openclaw/default}
+  default-agent-id: ${OPENCLAW_DEFAULT_AGENT_ID:main}
+  health-path: ${OPENCLAW_HEALTH_PATH:/}
+  responses-path: ${OPENCLAW_RESPONSES_PATH:/v1/responses}
+  tools-invoke-path: ${OPENCLAW_TOOLS_INVOKE_PATH:/tools/invoke}
+  connect-timeout-seconds: ${OPENCLAW_CONNECT_TIMEOUT_SECONDS:10}
+  read-timeout-seconds: ${OPENCLAW_READ_TIMEOUT_SECONDS:90}
+
+topcv:
+  webhook:
+    enabled: ${TOPCV_WEBHOOK_ENABLED:true}
+    require-api-key: ${TOPCV_WEBHOOK_REQUIRE_API_KEY:false}
+    api-key: ${TOPCV_WEBHOOK_API_KEY:}
+    api-key-header-name: ${TOPCV_WEBHOOK_API_KEY_HEADER_NAME:X-TopCV-Api-Key}
+    auth-query-param-name: ${TOPCV_WEBHOOK_AUTH_QUERY_PARAM_NAME:apiKey}
 
 interview:
   enabled: ${INTERVIEW_SCHEDULING_ENABLED:true}

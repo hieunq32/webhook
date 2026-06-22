@@ -1,0 +1,10 @@
+{
+  "title": "Java Developer",
+  "description": "Phat trien va bao tri he thong backend cho nen tang tuyen dung.",
+  "requirements": "Co kinh nghiem Java, Spring Boot, REST API, SQL.",
+  "salary": "25 - 40 trieu",
+  "location": "Ha Noi",
+  "workType": "HYBRID",
+  "status": "OPEN",
+  "applicantCount": 0
+}
