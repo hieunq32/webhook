@@ -7,13 +7,15 @@ public record OpenClawProperties(
         boolean enabled,
         String baseUrl,
         String gatewayToken,
+        String wslDistro,
         String defaultModel,
         String defaultAgentId,
         String healthPath,
         String responsesPath,
         String toolsInvokePath,
         int connectTimeoutSeconds,
-        int readTimeoutSeconds
+        int readTimeoutSeconds,
+        int tokenResolveTimeoutSeconds
 ) {
 
     public String healthUrl() {

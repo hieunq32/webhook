@@ -40,9 +40,7 @@ public record FacebookGroupPostingProperties(
     }
 
     public String effectiveRpaToolsInvokeUrl() {
-        return rpaToolsInvokeUrl == null || rpaToolsInvokeUrl.isBlank()
-                ? "http://127.0.0.1:18990/tools/invoke"
-                : rpaToolsInvokeUrl.trim();
+        return rpaToolsInvokeUrl == null || rpaToolsInvokeUrl.isBlank() ? null : rpaToolsInvokeUrl.trim();
     }
 
     public int effectiveRpaConnectTimeoutSeconds() {

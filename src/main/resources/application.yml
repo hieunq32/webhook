@@ -99,6 +99,7 @@ openclaw:
   enabled: ${OPENCLAW_ENABLED:true}
   base-url: ${OPENCLAW_BASE_URL:http://127.0.0.1:18889}
   gateway-token: ${OPENCLAW_GATEWAY_TOKEN:}
+  wsl-distro: ${OPENCLAW_WSL_DISTRO:Ubuntu-24.04}
   default-model: ${OPENCLAW_DEFAULT_MODEL:openclaw/default}
   default-agent-id: ${OPENCLAW_DEFAULT_AGENT_ID:main}
   health-path: ${OPENCLAW_HEALTH_PATH:/}
@@ -106,6 +107,7 @@ openclaw:
   tools-invoke-path: ${OPENCLAW_TOOLS_INVOKE_PATH:/tools/invoke}
   connect-timeout-seconds: ${OPENCLAW_CONNECT_TIMEOUT_SECONDS:10}
   read-timeout-seconds: ${OPENCLAW_READ_TIMEOUT_SECONDS:90}
+  token-resolve-timeout-seconds: ${OPENCLAW_TOKEN_RESOLVE_TIMEOUT_SECONDS:20}
 
 topcv:
   webhook:

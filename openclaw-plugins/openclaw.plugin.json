@@ -1,0 +1,30 @@
+{
+  "id": "facebook-group-rpa",
+  "name": "Facebook Group RPA",
+  "description": "Post recruitment content to Facebook Groups through the local Playwright RPA service.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "rpaToolsInvokeUrl": {
+        "type": "string",
+        "description": "Local Facebook Group RPA /tools/invoke endpoint.",
+        "default": "http://127.0.0.1:18990/tools/invoke"
+      },
+      "rpaAuthToken": {
+        "type": "string",
+        "description": "Optional bearer token for the local Facebook Group RPA service.",
+        "default": ""
+      }
+    }
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "facebookGroupPost"
+    ]
+  }
+}

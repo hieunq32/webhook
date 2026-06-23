@@ -69,31 +69,134 @@ async function openComposer(page) {
   throw new Error('Cannot find Facebook group post composer. Check group permission or UI language.');
 }
 
-async function typeComposerText(page, dialog, content) {
-  await page.waitForTimeout(300);
-  await page.keyboard.type(content, { delay: 2 });
-  await page.waitForTimeout(800);
-
+async function composerHasText(dialog, content) {
   const preview = content.slice(0, Math.min(content.length, 40));
   if (preview && await dialog.getByText(preview).first().isVisible().catch(() => false)) {
-    return;
+    return true;
   }
 
+  const editors = dialog.locator('[contenteditable="true"][data-lexical-editor="true"], [contenteditable="true"]');
+  const count = await editors.count().catch(() => 0);
+  for (let index = 0; index < count; index++) {
+    const editorText = await editors.nth(index).innerText().catch(() => '');
+    if (preview && editorText.includes(preview)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function typeComposerText(page, dialog, target, content) {
+  await target.scrollIntoViewIfNeeded().catch(() => undefined);
+  await target.click({ timeout: 10000, force: true });
+  await page.waitForTimeout(300);
+
+  await target.fill(content, { timeout: 10000 }).catch(() => undefined);
+  await page.waitForTimeout(700);
+  if (await composerHasText(dialog, content)) {
+    return true;
+  }
+
+  await target.click({ timeout: 10000, force: true }).catch(() => undefined);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A').catch(() => undefined);
   await page.keyboard.insertText(content);
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(700);
+  if (await composerHasText(dialog, content)) {
+    return true;
+  }
+
+  await target.evaluate((element, text) => {
+    element.focus();
+    document.execCommand('selectAll', false, null);
+    document.execCommand('insertText', false, text);
+    element.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      cancelable: true,
+      inputType: 'insertText',
+      data: text
+    }));
+  }, content).catch(() => undefined);
+  await page.waitForTimeout(900);
+  return composerHasText(dialog, content);
+}
+
+async function clickComposerBody(page, dialog) {
+  const box = await dialog.boundingBox().catch(() => null);
+  if (!box) {
+    return false;
+  }
+  await page.mouse.click(box.x + (box.width * 0.5), box.y + Math.min(260, box.height * 0.45));
+  await page.waitForTimeout(500);
+  return true;
+}
+
+async function forceFillComposerByDom(page, content) {
+  const focused = await page.evaluate((text) => {
+    const editors = Array.from(document.querySelectorAll('[contenteditable="true"][data-lexical-editor="true"], [contenteditable="true"]'));
+    const candidates = editors
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        const label = `${element.getAttribute('aria-label') || ''} ${element.getAttribute('aria-placeholder') || ''}`.toLowerCase();
+        return { element, rect, label, area: rect.width * rect.height };
+      })
+      .filter(({ rect, label }) => {
+        const visible = rect.width > 120
+          && rect.height > 20
+          && rect.bottom > 0
+          && rect.right > 0
+          && rect.top < window.innerHeight
+          && rect.left < window.innerWidth;
+        return visible
+          && !label.includes('comment')
+          && !label.includes('bình luận')
+          && !label.includes('binh luan');
+      })
+      .sort((left, right) => right.area - left.area);
+
+    const target = candidates[0]?.element;
+    if (!target) {
+      return false;
+    }
+
+    target.focus();
+    document.execCommand('selectAll', false, null);
+    document.execCommand('insertText', false, text);
+    target.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      cancelable: true,
+      inputType: 'insertText',
+      data: text
+    }));
+    return true;
+  }, content).catch(() => false);
+
+  if (!focused) {
+    return false;
+  }
+
+  await page.waitForTimeout(900);
+  return composerHasText(page, content);
 }
 
 async function fillComposer(page, content) {
-    const dialog = page.locator('div[role="dialog"]').last();
+  const dialog = page.locator('div[role="dialog"]').last();
   await dialog.waitFor({ state: 'visible', timeout: 30000 });
 
   const deadline = Date.now() + 45000;
   while (Date.now() < deadline) {
+    if (await forceFillComposerByDom(page, content)) {
+      return;
+    }
+
     const candidates = [
       dialog.locator('div[role="textbox"][contenteditable="true"][data-lexical-editor="true"]'),
       dialog.locator('div[role="textbox"][contenteditable="true"]'),
       dialog.locator('[contenteditable="true"][data-lexical-editor="true"]'),
-      dialog.locator('[contenteditable="true"]')
+      dialog.locator('[contenteditable="true"]'),
+      page.locator('div[role="textbox"][contenteditable="true"][data-lexical-editor="true"]'),
+      page.locator('div[role="textbox"][contenteditable="true"]'),
+      page.locator('[contenteditable="true"][data-lexical-editor="true"]'),
+      page.locator('[contenteditable="true"]')
     ];
 
     for (const locator of candidates) {
@@ -111,10 +214,9 @@ async function fillComposer(page, content) {
           continue;
         }
 
-        await target.scrollIntoViewIfNeeded().catch(() => undefined);
-        await target.click({ timeout: 10000, force: true });
-        await typeComposerText(page, dialog, content);
-        return;
+        if (await typeComposerText(page, dialog, target, content)) {
+          return;
+        }
       }
     }
 
@@ -122,8 +224,16 @@ async function fillComposer(page, content) {
     if (await placeholder.isVisible().catch(() => false)) {
       await placeholder.scrollIntoViewIfNeeded().catch(() => undefined);
       await placeholder.click({ timeout: 10000, force: true });
-      await typeComposerText(page, dialog, content);
-      return;
+      await page.waitForTimeout(700);
+      continue;
+    }
+
+    if (await clickComposerBody(page, dialog)) {
+      await page.keyboard.insertText(content).catch(() => undefined);
+      await page.waitForTimeout(900);
+      if (await composerHasText(dialog, content)) {
+        return;
+      }
     }
 
     await page.waitForTimeout(750);
@@ -144,6 +254,11 @@ async function submitPost(page) {
     for (let index = count - 1; index >= 0; index--) {
       const button = locator.nth(index);
       if (!(await button.isVisible().catch(() => false))) {
+        continue;
+      }
+      const ariaDisabled = await button.getAttribute('aria-disabled').catch(() => null);
+      const disabled = await button.getAttribute('disabled').catch(() => null);
+      if (ariaDisabled === 'true' || disabled !== null) {
         continue;
       }
       await button.waitFor({ state: 'visible', timeout: 10000 });

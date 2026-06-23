@@ -1,7 +1,9 @@
 package com.example.recruitmentbot.facebookgroup.service;
 
 import com.example.recruitmentbot.config.FacebookGroupPostingProperties;
+import com.example.recruitmentbot.config.OpenClawProperties;
 import com.example.recruitmentbot.openclaw.dto.OpenClawToolInvokeRequest;
+import com.example.recruitmentbot.openclaw.service.OpenClawAuthTokenResolver;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -22,15 +24,21 @@ public class OpenClawFacebookGroupRpaClient implements FacebookGroupRpaClient {
 
     private final RestTemplate restTemplate;
     private final FacebookGroupPostingProperties properties;
+    private final OpenClawProperties openClawProperties;
+    private final OpenClawAuthTokenResolver authTokenResolver;
 
     public OpenClawFacebookGroupRpaClient(
             RestTemplateBuilder builder,
-            FacebookGroupPostingProperties properties
+            FacebookGroupPostingProperties properties,
+            OpenClawProperties openClawProperties,
+            OpenClawAuthTokenResolver authTokenResolver
     ) {
         this.properties = properties;
+        this.openClawProperties = openClawProperties;
+        this.authTokenResolver = authTokenResolver;
         this.restTemplate = builder
-                .setConnectTimeout(Duration.ofSeconds(properties.effectiveRpaConnectTimeoutSeconds()))
-                .setReadTimeout(Duration.ofSeconds(properties.effectiveRpaReadTimeoutSeconds()))
+                .setConnectTimeout(Duration.ofSeconds(Math.max(openClawProperties.connectTimeoutSeconds(), properties.effectiveRpaConnectTimeoutSeconds())))
+                .setReadTimeout(Duration.ofSeconds(Math.max(openClawProperties.readTimeoutSeconds(), properties.effectiveRpaReadTimeoutSeconds())))
                 .build();
     }
 
@@ -52,20 +60,30 @@ public class OpenClawFacebookGroupRpaClient implements FacebookGroupRpaClient {
         );
         JsonNode response = invokeRpaTool(toolRequest);
 
+        JsonNode details = response == null ? null : response.path("result").path("details");
+        JsonNode nestedResult = details == null ? null : details.path("result");
         boolean success = response != null
-                && (response.path("success").asBoolean(false)
-                || response.path("ok").asBoolean(false)
-                || response.path("result").path("success").asBoolean(false)
-                || response.path("result").path("ok").asBoolean(false));
+                && (booleanValue(details, "success")
+                || booleanValue(details, "ok")
+                || booleanValue(nestedResult, "success")
+                || booleanValue(nestedResult, "ok")
+                || booleanValue(response.path("details"), "success")
+                || booleanValue(response.path("details"), "ok"));
         String message = firstText(
+                nestedResult == null ? null : nestedResult.path("message"),
+                nestedResult == null ? null : nestedResult.path("error"),
+                details == null ? null : details.path("message"),
+                details == null ? null : details.path("error"),
+                response == null ? null : response.path("details").path("message"),
+                response == null ? null : response.path("details").path("error"),
                 response == null ? null : response.path("message"),
-                response == null ? null : response.path("error"),
-                response == null ? null : response.path("result").path("message"),
-                response == null ? null : response.path("result").path("error")
+                response == null ? null : response.path("error")
         );
         String postUrl = firstText(
-                response == null ? null : response.path("postUrl"),
-                response == null ? null : response.path("result").path("postUrl")
+                nestedResult == null ? null : nestedResult.path("postUrl"),
+                details == null ? null : details.path("postUrl"),
+                response == null ? null : response.path("details").path("postUrl"),
+                response == null ? null : response.path("postUrl")
         );
 
         return new FacebookGroupRpaResult(
@@ -79,13 +97,16 @@ public class OpenClawFacebookGroupRpaClient implements FacebookGroupRpaClient {
     private JsonNode invokeRpaTool(OpenClawToolInvokeRequest request) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        if (StringUtils.hasText(properties.rpaAuthToken())) {
-            headers.setBearerAuth(properties.rpaAuthToken().trim());
+        String token = StringUtils.hasText(properties.rpaAuthToken())
+                ? properties.rpaAuthToken().trim()
+                : authTokenResolver.resolveToken();
+        if (StringUtils.hasText(token)) {
+            headers.setBearerAuth(token.trim());
         }
 
         try {
             ResponseEntity<JsonNode> response = restTemplate.exchange(
-                    properties.effectiveRpaToolsInvokeUrl(),
+                    effectiveToolsInvokeUrl(),
                     HttpMethod.POST,
                     new HttpEntity<>(request, headers),
                     JsonNode.class
@@ -95,6 +116,15 @@ public class OpenClawFacebookGroupRpaClient implements FacebookGroupRpaClient {
             String body = exception.getResponseBodyAsString();
             throw new IllegalStateException("Facebook Group RPA tool failed: " + body, exception);
         }
+    }
+
+    private String effectiveToolsInvokeUrl() {
+        String overrideUrl = properties.effectiveRpaToolsInvokeUrl();
+        return StringUtils.hasText(overrideUrl) ? overrideUrl : openClawProperties.toolsInvokeUrl();
+    }
+
+    private boolean booleanValue(JsonNode node, String fieldName) {
+        return node != null && !node.isMissingNode() && node.path(fieldName).asBoolean(false);
     }
 
     private String firstText(JsonNode... nodes) {

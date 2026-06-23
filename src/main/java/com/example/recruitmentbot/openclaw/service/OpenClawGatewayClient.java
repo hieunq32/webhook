@@ -30,10 +30,16 @@ public class OpenClawGatewayClient {
 
     private final RestTemplate restTemplate;
     private final OpenClawProperties properties;
+    private final OpenClawAuthTokenResolver authTokenResolver;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public OpenClawGatewayClient(RestTemplateBuilder builder, OpenClawProperties properties) {
+    public OpenClawGatewayClient(
+            RestTemplateBuilder builder,
+            OpenClawProperties properties,
+            OpenClawAuthTokenResolver authTokenResolver
+    ) {
         this.properties = properties;
+        this.authTokenResolver = authTokenResolver;
         this.restTemplate = builder
                 .setConnectTimeout(Duration.ofSeconds(Math.max(properties.connectTimeoutSeconds(), 1)))
                 .setReadTimeout(Duration.ofSeconds(Math.max(properties.readTimeoutSeconds(), 1)))
@@ -170,8 +176,9 @@ public class OpenClawGatewayClient {
     private HttpHeaders buildJsonHeaders() {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        if (StringUtils.hasText(properties.gatewayToken())) {
-            headers.setBearerAuth(properties.gatewayToken().trim());
+        String token = authTokenResolver.resolveToken();
+        if (StringUtils.hasText(token)) {
+            headers.setBearerAuth(token.trim());
         }
         return headers;
     }
