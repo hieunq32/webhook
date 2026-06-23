@@ -1,0 +1,17 @@
+{
+  "name": "facebook-group-rpa-tool",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "OpenClaw-compatible Facebook Group posting RPA tool for the recruitment assistant POC.",
+  "scripts": {
+    "install:browsers": "playwright install chromium",
+    "login": "node src/login-facebook.js",
+    "smoke:browser": "node src/smoke-browser.js",
+    "start": "node src/server.js",
+    "check": "node --check src/common.js && node --check src/facebook-group-post.js && node --check src/login-facebook.js && node --check src/server.js && node --check src/smoke-browser.js"
+  },
+  "dependencies": {
+    "playwright": "latest"
+  }
+}

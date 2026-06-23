@@ -15,5 +15,7 @@ public interface JobDescriptionRepository extends JpaRepository<JobDescription, 
             OffsetDateTime createdAt
     );
 
+    List<JobDescription> findAllByStatusOrderByCreatedAtDesc(JobStatus status);
+
     Optional<JobDescription> findFirstByTitleIgnoreCaseOrderByCreatedAtDesc(String title);
 }

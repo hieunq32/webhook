@@ -1,0 +1,4 @@
+node_modules/
+storage/*.json
+artifacts/*.png
+artifacts/*.html

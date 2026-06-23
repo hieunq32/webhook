@@ -3,6 +3,10 @@ package com.example.recruitmentbot.service;
 import com.example.recruitmentbot.config.FacebookHrProperties;
 import com.example.recruitmentbot.council.domain.CouncilHiringRequest;
 import com.example.recruitmentbot.council.service.RecruitmentCouncilService;
+import com.example.recruitmentbot.facebookgroup.dto.FacebookGroupPostSummaryResponse;
+import com.example.recruitmentbot.facebookgroup.dto.FacebookGroupTargetRequest;
+import com.example.recruitmentbot.facebookgroup.dto.FacebookGroupTargetResponse;
+import com.example.recruitmentbot.facebookgroup.service.FacebookGroupPostingService;
 import com.example.recruitmentbot.hradmin.domain.PageAdminAccount;
 import com.example.recruitmentbot.hradmin.domain.PageAdminPermission;
 import com.example.recruitmentbot.hradmin.domain.PageAdminRole;
@@ -36,7 +40,7 @@ public class MessengerWebhookService {
     private static final long MESSAGE_DEDUP_TTL_MILLIS = 10 * 60 * 1000L;
     private static final long ADMIN_SESSION_TTL_MILLIS = 10 * 60 * 1000L;
     private static final int ADMIN_JOB_LIST_LIMIT = 8;
-    private static final Pattern MENU_PREFIX_PATTERN = Pattern.compile("^\\s*([1-4])[\\s\\.:,-]*(.*)$");
+    private static final Pattern MENU_PREFIX_PATTERN = Pattern.compile("^\\s*([1-5])[\\s\\.:,-]*(.*)$");
     private static final Pattern SUBMENU_PREFIX_PATTERN = Pattern.compile("^\\s*([1-2])[\\s\\.:,-]*(.*)$");
     private static final Pattern JOB_ID_PREFIX_PATTERN = Pattern.compile("^\\s*(\\d+)\\s*(.*)$");
 
@@ -46,6 +50,7 @@ public class MessengerWebhookService {
     private final PageAdminAccountService pageAdminAccountService;
     private final CandidateProfileService candidateProfileService;
     private final FacebookJobPostingService facebookJobPostingService;
+    private final FacebookGroupPostingService facebookGroupPostingService;
     private final InterviewSchedulingService interviewSchedulingService;
     private final RecruitmentCouncilService recruitmentCouncilService;
     private final ExecutorService webhookExecutor = Executors.newCachedThreadPool();
@@ -59,6 +64,7 @@ public class MessengerWebhookService {
             PageAdminAccountService pageAdminAccountService,
             CandidateProfileService candidateProfileService,
             FacebookJobPostingService facebookJobPostingService,
+            FacebookGroupPostingService facebookGroupPostingService,
             InterviewSchedulingService interviewSchedulingService,
             RecruitmentCouncilService recruitmentCouncilService
     ) {
@@ -68,6 +74,7 @@ public class MessengerWebhookService {
         this.pageAdminAccountService = pageAdminAccountService;
         this.candidateProfileService = candidateProfileService;
         this.facebookJobPostingService = facebookJobPostingService;
+        this.facebookGroupPostingService = facebookGroupPostingService;
         this.interviewSchedulingService = interviewSchedulingService;
         this.recruitmentCouncilService = recruitmentCouncilService;
     }
@@ -234,6 +241,17 @@ public class MessengerWebhookService {
             return;
         }
 
+        if (handleGroupManagementIntent(adminAccount, senderId, sanitizedText)) {
+            state.mode = AdminConversationMode.IDLE;
+            return;
+        }
+
+        if (isGroupPostIntent(sanitizedText)) {
+            state.mode = AdminConversationMode.IDLE;
+            processGroupPostIntent(adminAccount, senderId, state, sanitizedText);
+            return;
+        }
+
         AdminMenuChoice menuChoice = parseMenuChoice(sanitizedText);
         String remainingText = menuChoice == null ? sanitizedText : menuChoice.remainder();
 
@@ -264,6 +282,7 @@ public class MessengerWebhookService {
             case AWAIT_SCHEDULE_EDIT_SLOT_ID -> processScheduleEditSelection(adminAccount, senderId, state, sanitizedText);
             case AWAIT_SCHEDULE_EDIT_REASON -> processScheduleEditReason(adminAccount, senderId, state, sanitizedText);
             case AWAIT_COUNCIL_HIRING_REQUEST -> processCouncilHiringRequest(adminAccount, senderId, state, sanitizedText);
+            case AWAIT_GROUP_POST_JOB_SELECTION -> processGroupPostJobSelection(adminAccount, senderId, state, sanitizedText);
             default -> {
                 state.mode = AdminConversationMode.IDLE;
                 state.targetJobId = null;
@@ -271,6 +290,190 @@ public class MessengerWebhookService {
                 sendAdminMenu(adminAccount, senderId, "Da quay ve menu chinh.");
             }
         }
+    }
+
+    private boolean handleGroupManagementIntent(PageAdminAccount adminAccount, String senderId, String text) {
+        String normalized = normalizeText(text);
+        if (matchesIntent(normalized, "them group")
+                || matchesIntent(normalized, "them nhom")
+                || matchesIntent(normalized, "add group")) {
+            if (!pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.AUTO_POST_JOB)) {
+                sendAdminMenu(adminAccount, senderId, "Tai khoan nay khong co quyen quan ly Facebook Group.");
+                return true;
+            }
+            String payload = stripLeadingWords(text, normalized.startsWith("add group") ? 2 : 2);
+            FacebookGroupTargetRequest request = parseGroupTargetRequest(payload);
+            if (request == null) {
+                facebookMessengerService.sendTextMessage(senderId,
+                        "Gui theo format: them group <ten group> | <group id hoac url>. Vi du: them group Java Jobs Ha Noi | https://facebook.com/groups/...");
+                return true;
+            }
+            FacebookGroupTargetResponse response = facebookGroupPostingService.createGroup(request);
+            facebookMessengerService.sendTextMessage(senderId,
+                    "Da them Facebook Group:\n"
+                            + "ID: " + response.id() + "\n"
+                            + "Ten: " + response.displayName() + "\n"
+                            + "Reference: " + response.groupReference());
+            return true;
+        }
+
+        if (matchesIntent(normalized, "xem group")
+                || matchesIntent(normalized, "xem nhom")
+                || matchesIntent(normalized, "danh sach group")
+                || matchesIntent(normalized, "danh sach nhom")
+                || matchesIntent(normalized, "list group")
+                || matchesIntent(normalized, "list groups")) {
+            if (!pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.AUTO_POST_JOB)) {
+                sendAdminMenu(adminAccount, senderId, "Tai khoan nay khong co quyen quan ly Facebook Group.");
+                return true;
+            }
+            facebookMessengerService.sendTextMessage(senderId, facebookGroupPostingService.buildGroupSelectionSummary());
+            return true;
+        }
+
+        if (matchesIntent(normalized, "xoa group")
+                || matchesIntent(normalized, "bo group")
+                || matchesIntent(normalized, "tat group")
+                || matchesIntent(normalized, "xoa nhom")
+                || matchesIntent(normalized, "bo nhom")
+                || matchesIntent(normalized, "tat nhom")) {
+            if (!pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.AUTO_POST_JOB)) {
+                sendAdminMenu(adminAccount, senderId, "Tai khoan nay khong co quyen quan ly Facebook Group.");
+                return true;
+            }
+            Long groupId = parseAnyLong(text);
+            if (groupId == null) {
+                facebookMessengerService.sendTextMessage(senderId, "Hay gui groupId can tat. Vi du: tat group 2");
+                return true;
+            }
+            FacebookGroupTargetResponse response = facebookGroupPostingService.deactivateGroup(groupId);
+            facebookMessengerService.sendTextMessage(senderId,
+                    "Da tat Facebook Group:\n"
+                            + "ID: " + response.id() + "\n"
+                            + "Ten: " + response.displayName());
+            return true;
+        }
+
+        return false;
+    }
+
+    private void processGroupPostIntent(
+            PageAdminAccount adminAccount,
+            String senderId,
+            AdminConversationState state,
+            String text
+    ) {
+        if (!pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.AUTO_POST_JOB)) {
+            sendAdminMenu(adminAccount, senderId, "Tai khoan nay khong co quyen dang bai group.");
+            return;
+        }
+
+        GroupPostSelection selection = parseGroupPostSelection(text);
+        if (selection.jobId() != null && selection.groupIds() != null && !selection.groupIds().isEmpty()) {
+            publishJobToSelectedGroupsAndNotify(adminAccount, senderId, selection.jobId(), selection.groupIds());
+            state.mode = AdminConversationMode.IDLE;
+            return;
+        }
+
+        Optional<Long> jobId = facebookGroupPostingService.resolveOpenJobIdFromMessage(text);
+        if (jobId.isEmpty()) {
+            state.mode = AdminConversationMode.AWAIT_GROUP_POST_JOB_SELECTION;
+            facebookMessengerService.sendTextMessage(senderId, facebookGroupPostingService.buildOpenJobSelectionPrompt());
+            return;
+        }
+
+        publishJobToGroupsAndNotify(adminAccount, senderId, jobId.get());
+        state.mode = AdminConversationMode.IDLE;
+    }
+
+    private void publishJobToSelectedGroupsAndNotify(
+            PageAdminAccount adminAccount,
+            String senderId,
+            Long jobId,
+            List<Long> groupIds
+    ) {
+        try {
+            FacebookGroupPostSummaryResponse summary = facebookGroupPostingService.publishJobToSelectedGroups(
+                    jobId,
+                    groupIds,
+                    senderId,
+                    "messenger"
+            );
+            facebookMessengerService.sendTextMessage(senderId, facebookGroupPostingService.buildMessengerSummary(summary));
+            sendAdminMenu(adminAccount, senderId, "Quay ve menu.");
+        } catch (Exception exception) {
+            log.error("Selected Facebook Group posting flow failed for HR senderId={}, jobId={}, groupIds={}",
+                    senderId, jobId, groupIds, exception);
+            sendAdminMenu(adminAccount, senderId, "Dang Facebook Group that bai: " + exception.getMessage());
+        }
+    }
+
+    private void processGroupPostJobSelection(
+            PageAdminAccount adminAccount,
+            String senderId,
+            AdminConversationState state,
+            String text
+    ) {
+        if ("0".equals(text.trim())) {
+            state.mode = AdminConversationMode.IDLE;
+            sendAdminMenu(adminAccount, senderId, "Da huy dang Facebook Group.");
+            return;
+        }
+
+        Optional<Long> jobId = facebookGroupPostingService.resolveOpenJobIdFromMessage(text);
+        if (jobId.isEmpty()) {
+            facebookMessengerService.sendTextMessage(senderId,
+                    "Chua xac dinh duoc JD. Hay tra loi bang jobId trong danh sach.\n"
+                            + facebookGroupPostingService.buildOpenJobSelectionPrompt());
+            return;
+        }
+
+        publishJobToGroupsAndNotify(adminAccount, senderId, jobId.get());
+        state.mode = AdminConversationMode.IDLE;
+    }
+
+    private void publishJobToGroupsAndNotify(PageAdminAccount adminAccount, String senderId, Long jobId) {
+        try {
+            FacebookGroupPostSummaryResponse summary = facebookGroupPostingService.publishJobToActiveGroups(
+                    jobId,
+                    senderId,
+                    "messenger"
+            );
+            facebookMessengerService.sendTextMessage(senderId, facebookGroupPostingService.buildMessengerSummary(summary));
+            sendAdminMenu(adminAccount, senderId, "Quay ve menu.");
+        } catch (Exception exception) {
+            log.error("Facebook Group posting flow failed for HR senderId={}, jobId={}", senderId, jobId, exception);
+            sendAdminMenu(adminAccount, senderId, "Dang Facebook Group that bai: " + exception.getMessage());
+        }
+    }
+
+    private FacebookGroupTargetRequest parseGroupTargetRequest(String payload) {
+        if (!StringUtils.hasText(payload) || !payload.contains("|")) {
+            return null;
+        }
+        String[] parts = payload.split("\\|", 2);
+        String displayName = parts[0].trim();
+        String reference = parts[1].trim();
+        if (!StringUtils.hasText(displayName) || !StringUtils.hasText(reference)) {
+            return null;
+        }
+        return new FacebookGroupTargetRequest(displayName, reference, true, 100);
+    }
+
+    private boolean isGroupPostIntent(String text) {
+        String normalized = normalizeText(text);
+        String compact = compactText(normalized);
+        return matchesIntent(normalized, "dang group")
+                || matchesIntent(normalized, "post group")
+                || matchesIntent(normalized, "dang nhom")
+                || matchesIntent(normalized, "post nhom")
+                || matchesIntent(normalized, "dang facebook group")
+                || compact.contains("danggroup")
+                || compact.contains("postgroup")
+                || compact.contains("dangnhom")
+                || compact.contains("postnhom")
+                || compact.contains("nggroup")
+                || compact.contains("ngnhom");
     }
 
     private void processAdminMenuChoice(
@@ -323,6 +526,14 @@ public class MessengerWebhookService {
                 state.mode = AdminConversationMode.IDLE;
                 facebookMessengerService.sendTextMessage(senderId, recruitmentCouncilService.buildPendingHiringRequestsSummary());
                 sendAdminMenu(adminAccount, senderId, "Quay ve menu.");
+            }
+            case 5 -> {
+                if (!pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.AUTO_POST_JOB)) {
+                    sendAdminMenu(adminAccount, senderId, "Tai khoan nay khong co quyen dang bai Facebook Group.");
+                    return;
+                }
+                processGroupPostIntent(adminAccount, senderId, state,
+                        StringUtils.hasText(remainder) ? "dang group " + remainder : "dang group");
             }
             default -> sendAdminMenu(adminAccount, senderId, "Lua chon khong hop le.");
         }
@@ -610,11 +821,15 @@ public class MessengerWebhookService {
             menu.append("4. Request tu Hoi dong\n");
             optionCount++;
         }
+        if (pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.AUTO_POST_JOB)) {
+            menu.append("5. Dang bai len Facebook Group\n");
+            optionCount++;
+        }
 
         if (optionCount == 0) {
             menu.append("Tai khoan admin nay chua duoc cap quyen trong database.");
         } else {
-            menu.append("Nhap 1/2/3/4 hoac go ten chuc nang.");
+            menu.append("Nhap 1/2/3/4/5 hoac go ten chuc nang.");
         }
 
         facebookMessengerService.sendTextMessage(senderId, menu.toString());
@@ -833,6 +1048,51 @@ public class MessengerWebhookService {
         return Long.parseLong(matcher.group(1));
     }
 
+    private Long parseAnyLong(String text) {
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        Matcher matcher = Pattern.compile("\\b(\\d+)\\b").matcher(text.trim());
+        return matcher.find() ? Long.parseLong(matcher.group(1)) : null;
+    }
+
+    private GroupPostSelection parseGroupPostSelection(String text) {
+        if (!StringUtils.hasText(text)) {
+            return new GroupPostSelection(null, List.of());
+        }
+
+        String normalized = normalizeText(text);
+        Long jobId = parseNumberAfterKeyword(normalized, "job");
+        if (jobId == null) {
+            jobId = parseNumberAfterKeyword(normalized, "jd");
+        }
+        Long groupId = parseNumberAfterKeyword(normalized, "group");
+        if (groupId == null) {
+            groupId = parseNumberAfterKeyword(normalized, "nhom");
+        }
+
+        if (jobId == null || groupId == null) {
+            Matcher matcher = Pattern.compile("\\b(\\d+)\\b").matcher(normalized);
+            List<Long> numbers = new java.util.ArrayList<>();
+            while (matcher.find()) {
+                numbers.add(Long.parseLong(matcher.group(1)));
+            }
+            if (jobId == null && !numbers.isEmpty()) {
+                jobId = numbers.get(0);
+            }
+            if (groupId == null && numbers.size() >= 2) {
+                groupId = numbers.get(1);
+            }
+        }
+
+        return new GroupPostSelection(jobId, groupId == null ? List.of() : List.of(groupId));
+    }
+
+    private Long parseNumberAfterKeyword(String normalizedText, String keyword) {
+        Matcher matcher = Pattern.compile("\\b" + Pattern.quote(keyword) + "\\s+(\\d+)\\b").matcher(normalizedText);
+        return matcher.find() ? Long.parseLong(matcher.group(1)) : null;
+    }
+
     private void cleanupAdminConversations() {
         long now = System.currentTimeMillis();
         adminConversationStates.entrySet().removeIf(entry -> now - entry.getValue().lastActiveAt > ADMIN_SESSION_TTL_MILLIS);
@@ -880,7 +1140,8 @@ public class MessengerWebhookService {
         AWAIT_SCHEDULE_DETAIL_SLOT_ID,
         AWAIT_SCHEDULE_EDIT_SLOT_ID,
         AWAIT_SCHEDULE_EDIT_REASON,
-        AWAIT_COUNCIL_HIRING_REQUEST
+        AWAIT_COUNCIL_HIRING_REQUEST,
+        AWAIT_GROUP_POST_JOB_SELECTION
     }
 
     private static class AdminConversationState {
@@ -904,5 +1165,8 @@ public class MessengerWebhookService {
     }
 
     private record AdminJobEditRequest(Long jobId, String content) {
+    }
+
+    private record GroupPostSelection(Long jobId, List<Long> groupIds) {
     }
 }

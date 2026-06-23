@@ -2,6 +2,10 @@ server:
   error:
     include-message: always
   port: 8080
+  tomcat:
+    threads:
+      max: ${SERVER_TOMCAT_THREADS_MAX:30}
+      min-spare: ${SERVER_TOMCAT_THREADS_MIN_SPARE:3}
 
 spring:
   datasource:
@@ -36,6 +40,19 @@ facebook:
     page-access-token: ${FACEBOOK_PAGE_POST_ACCESS_TOKEN:EAAcgcmjJBO0BRtN6fBr2E21XF0gHcsaBvfvKfJh8VUHuwnxGWPq3u7Iqreq4ZAm4sMZADf0lXZBB76PQM5reZBRIFBfrg39sB8zqJXCxZB69WFYOU0xn17rcTqgQWbTVVZBaT2Pq5ZCwRg8uAA6rz0FOPwe9Isc31K8bR1tKBLgIXhhwFoWplo9juSCuSoWseoPMZBTZCuIsoKZBJwxllgVyKb9pBzaQZDZD}
     graph-api-base-url: ${FACEBOOK_GRAPH_API_BASE_URL:https://graph.facebook.com/v23.0}
     repost-cron: ${FACEBOOK_JOB_REPOST_CRON:0 0 8 ? * MON-FRI}
+  group-posting:
+    enabled: ${FACEBOOK_GROUP_POSTING_ENABLED:true}
+    scheduler-enabled: ${FACEBOOK_GROUP_POSTING_SCHEDULER_ENABLED:false}
+    scheduler-cron: ${FACEBOOK_GROUP_POSTING_CRON:0 30 8 ? * MON,WED}
+    open-claw-script-name: ${FACEBOOK_GROUP_POSTING_OPENCLAW_SCRIPT_NAME:facebookGroupPost}
+    delay-min-seconds: ${FACEBOOK_GROUP_POSTING_DELAY_MIN_SECONDS:15}
+    delay-max-seconds: ${FACEBOOK_GROUP_POSTING_DELAY_MAX_SECONDS:90}
+    max-posts-per-day-per-group: ${FACEBOOK_GROUP_POSTING_MAX_POSTS_PER_DAY_PER_GROUP:3}
+    retry-count: ${FACEBOOK_GROUP_POSTING_RETRY_COUNT:2}
+    rpa-tools-invoke-url: ${FACEBOOK_GROUP_POSTING_RPA_TOOLS_INVOKE_URL:http://127.0.0.1:18990/tools/invoke}
+    rpa-auth-token: ${FACEBOOK_GROUP_POSTING_RPA_AUTH_TOKEN:}
+    rpa-connect-timeout-seconds: ${FACEBOOK_GROUP_POSTING_RPA_CONNECT_TIMEOUT_SECONDS:10}
+    rpa-read-timeout-seconds: ${FACEBOOK_GROUP_POSTING_RPA_READ_TIMEOUT_SECONDS:180}
 
 openai:
   mode: OLLAMA
@@ -242,6 +259,6 @@ spring:
     activate:
       on-profile: postgres
   datasource:
-    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/webhook}
+    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5433/webhook?sslmode=disable&connectTimeout=10&socketTimeout=30}
     username: ${POSTGRES_USERNAME:admin}
     password: ${POSTGRES_PASSWORD:admin}
