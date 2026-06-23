@@ -10,4 +10,5 @@ if [ ! -f "${TARGET_DIR}/package.json" ]; then
 fi
 
 cd "${TARGET_DIR}"
+export FACEBOOK_RPA_HEADLESS="${FACEBOOK_RPA_HEADLESS:-true}"
 npm run start

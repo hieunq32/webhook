@@ -4,6 +4,7 @@ const path = require('node:path');
 const rootDir = path.resolve(__dirname, '..');
 const storageDir = path.join(rootDir, 'storage');
 const artifactsDir = path.join(rootDir, 'artifacts');
+const defaultSelectorsPath = path.join(rootDir, 'config', 'facebook-selectors.json');
 
 function env(name, fallback) {
   const value = process.env[name];
@@ -25,14 +26,34 @@ function parseInteger(value, fallback) {
 const config = {
   port: parseInteger(env('FACEBOOK_RPA_PORT', '18990'), 18990),
   storageStatePath: path.resolve(env('FACEBOOK_RPA_STORAGE_STATE', path.join(storageDir, 'facebook-session.json'))),
+  selectorsConfigPath: path.resolve(env('FACEBOOK_RPA_SELECTORS_CONFIG', defaultSelectorsPath)),
   headless: parseBoolean(env('FACEBOOK_RPA_HEADLESS', 'false'), false),
   slowMoMs: parseInteger(env('FACEBOOK_RPA_SLOW_MO_MS', '40'), 40),
   timeoutMs: parseInteger(env('FACEBOOK_RPA_TIMEOUT_MS', '90000'), 90000),
   postSubmitWaitMs: parseInteger(env('FACEBOOK_RPA_POST_SUBMIT_WAIT_MS', '7000'), 7000),
+  postSubmitVerifyMs: parseInteger(env('FACEBOOK_RPA_POST_SUBMIT_VERIFY_MS', '15000'), 15000),
+  successSnapshotEnabled: parseBoolean(env('FACEBOOK_RPA_SUCCESS_SNAPSHOT_ENABLED', 'true'), true),
   authToken: env('FACEBOOK_RPA_AUTH_TOKEN', ''),
   locale: env('FACEBOOK_RPA_LOCALE', 'vi-VN'),
   timezoneId: env('FACEBOOK_RPA_TIMEZONE', 'Asia/Ho_Chi_Minh')
 };
+
+function readJsonFile(filePath, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    if (fallback !== undefined) {
+      return fallback;
+    }
+    throw new Error(`Cannot read JSON config ${filePath}: ${error.message}`);
+  }
+}
+
+const selectors = readJsonFile(config.selectorsConfigPath, {
+  textPatterns: {},
+  cssSelectors: {},
+  retry: {}
+});
 
 function ensureRuntimeDirs() {
   fs.mkdirSync(storageDir, { recursive: true });
@@ -113,5 +134,6 @@ module.exports = {
   normalizeGroupUrl,
   readJsonBody,
   safeName,
+  selectors,
   sessionExists
 };

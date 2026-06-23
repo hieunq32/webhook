@@ -6,14 +6,56 @@ const {
   ensureRuntimeDirs,
   normalizeGroupUrl,
   safeName,
+  selectors,
   sessionExists
 } = require('./common');
 
-const COMPOSER_TEXT = /write something|what's on your mind|create post|create a public post|viết gì|ban viet gi|bạn viết gì|tạo bài viết|tao bai viet|bạn đang nghĩ gì|ban dang nghi gi/i;
-const POST_BUTTON_TEXT = /^(post|publish|đăng|dang)$/i;
-const COOKIE_TEXT = /allow all cookies|accept all|chấp nhận tất cả|chap nhan tat ca|cho phép tất cả|cho phep tat ca/i;
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
-const COMPOSER_PLACEHOLDER_TEXT = /write something|what's on your mind|create a public post|tao bai viet|ban viet gi|tạo bài viết|bạn viết gì/i;
+function patternFromConfig(path, fallback, anchored = false) {
+  const values = path.reduce((current, key) => current?.[key], selectors);
+  const source = Array.isArray(values) && values.length ? values : fallback;
+  const body = source.map(escapeRegExp).join('|');
+  return new RegExp(anchored ? `^(${body})$` : body, 'i');
+}
+
+function cssList(name, fallback) {
+  const configured = selectors.cssSelectors?.[name];
+  return Array.isArray(configured) && configured.length ? configured : fallback;
+}
+
+const COMPOSER_TEXT = patternFromConfig(['textPatterns', 'composer'], [
+  'write something',
+  "what's on your mind",
+  'create post',
+  'create a public post',
+  'viet gi',
+  'ban viet gi',
+  'tao bai viet',
+  'ban dang nghi gi'
+]);
+const POST_BUTTON_TEXT = patternFromConfig(['textPatterns', 'postButton'], ['post', 'publish', 'dang'], true);
+const COOKIE_TEXT = patternFromConfig(['textPatterns', 'cookieButton'], ['allow all cookies', 'accept all']);
+const COMPOSER_PLACEHOLDER_TEXT = patternFromConfig(['textPatterns', 'composerPlaceholder'], [
+  'write something',
+  "what's on your mind",
+  'create a public post',
+  'tao bai viet',
+  'ban viet gi'
+]);
+const NEGATIVE_EDITOR_LABELS = patternFromConfig(['textPatterns', 'negativeEditorLabels'], ['comment', 'binh luan']);
+const SUBMIT_FAILURE_TEXT = patternFromConfig(['textPatterns', 'submitFailure'], [
+  'something went wrong',
+  "couldn't post",
+  'could not post',
+  'try again',
+  'temporarily blocked',
+  'not allowed'
+]);
+const STEP_ATTEMPTS = Number.parseInt(selectors.retry?.stepAttempts, 10) || 3;
+const STEP_DELAY_MS = Number.parseInt(selectors.retry?.stepDelayMs, 10) || 1200;
 
 async function isLoginPage(page) {
   const url = page.url();
@@ -60,7 +102,9 @@ async function openComposer(page) {
   const candidates = [
     page.getByRole('button', { name: COMPOSER_TEXT }),
     page.locator('div[role="button"]').filter({ hasText: COMPOSER_TEXT }),
-    page.locator('span').filter({ hasText: COMPOSER_TEXT })
+    page.locator('span').filter({ hasText: COMPOSER_TEXT }),
+    ...cssList('composerTriggers', ['div[role="button"]'])
+      .map(selector => page.locator(selector).filter({ hasText: COMPOSER_TEXT }))
   ];
 
   if (await clickFirstVisible(candidates)) {
@@ -69,13 +113,13 @@ async function openComposer(page) {
   throw new Error('Cannot find Facebook group post composer. Check group permission or UI language.');
 }
 
-async function composerHasText(dialog, content) {
+async function composerHasText(scope, content) {
   const preview = content.slice(0, Math.min(content.length, 40));
-  if (preview && await dialog.getByText(preview).first().isVisible().catch(() => false)) {
+  if (preview && await scope.getByText(preview).first().isVisible().catch(() => false)) {
     return true;
   }
 
-  const editors = dialog.locator('[contenteditable="true"][data-lexical-editor="true"], [contenteditable="true"]');
+  const editors = scope.locator('[contenteditable="true"][data-lexical-editor="true"], [contenteditable="true"]');
   const count = await editors.count().catch(() => 0);
   for (let index = 0; index < count; index++) {
     const editorText = await editors.nth(index).innerText().catch(() => '');
@@ -131,7 +175,8 @@ async function clickComposerBody(page, dialog) {
 }
 
 async function forceFillComposerByDom(page, content) {
-  const focused = await page.evaluate((text) => {
+  const negativeLabels = selectors.textPatterns?.negativeEditorLabels || ['comment', 'binh luan'];
+  const focused = await page.evaluate(({ text, negativeLabels }) => {
     const editors = Array.from(document.querySelectorAll('[contenteditable="true"][data-lexical-editor="true"], [contenteditable="true"]'));
     const candidates = editors
       .map((element) => {
@@ -146,10 +191,8 @@ async function forceFillComposerByDom(page, content) {
           && rect.right > 0
           && rect.top < window.innerHeight
           && rect.left < window.innerWidth;
-        return visible
-          && !label.includes('comment')
-          && !label.includes('bình luận')
-          && !label.includes('binh luan');
+        const isNegative = negativeLabels.some(value => label.includes(String(value).toLowerCase()));
+        return visible && !isNegative;
       })
       .sort((left, right) => right.area - left.area);
 
@@ -168,7 +211,7 @@ async function forceFillComposerByDom(page, content) {
       data: text
     }));
     return true;
-  }, content).catch(() => false);
+  }, { text: content, negativeLabels }).catch(() => false);
 
   if (!focused) {
     return false;
@@ -179,7 +222,8 @@ async function forceFillComposerByDom(page, content) {
 }
 
 async function fillComposer(page, content) {
-  const dialog = page.locator('div[role="dialog"]').last();
+  const dialogSelector = cssList('dialogs', ['div[role="dialog"]']).join(', ');
+  const dialog = page.locator(dialogSelector).last();
   await dialog.waitFor({ state: 'visible', timeout: 30000 });
 
   const deadline = Date.now() + 45000;
@@ -188,15 +232,15 @@ async function fillComposer(page, content) {
       return;
     }
 
+    const textboxSelectors = cssList('editableTextboxes', [
+      'div[role="textbox"][contenteditable="true"][data-lexical-editor="true"]',
+      'div[role="textbox"][contenteditable="true"]',
+      '[contenteditable="true"][data-lexical-editor="true"]',
+      '[contenteditable="true"]'
+    ]);
     const candidates = [
-      dialog.locator('div[role="textbox"][contenteditable="true"][data-lexical-editor="true"]'),
-      dialog.locator('div[role="textbox"][contenteditable="true"]'),
-      dialog.locator('[contenteditable="true"][data-lexical-editor="true"]'),
-      dialog.locator('[contenteditable="true"]'),
-      page.locator('div[role="textbox"][contenteditable="true"][data-lexical-editor="true"]'),
-      page.locator('div[role="textbox"][contenteditable="true"]'),
-      page.locator('[contenteditable="true"][data-lexical-editor="true"]'),
-      page.locator('[contenteditable="true"]')
+      ...textboxSelectors.map(selector => dialog.locator(selector)),
+      ...textboxSelectors.map(selector => page.locator(selector))
     ];
 
     for (const locator of candidates) {
@@ -210,7 +254,7 @@ async function fillComposer(page, content) {
         const aria = await target.getAttribute('aria-label').catch(() => '') || '';
         const placeholder = await target.getAttribute('aria-placeholder').catch(() => '') || '';
         const label = `${aria} ${placeholder}`.toLowerCase();
-        if (label.includes('comment') || label.includes('bình luận') || label.includes('binh luan')) {
+        if (NEGATIVE_EDITOR_LABELS.test(label)) {
           continue;
         }
 
@@ -243,10 +287,14 @@ async function fillComposer(page, content) {
 }
 
 async function submitPost(page) {
-  const dialog = page.locator('div[role="dialog"]').last();
+  const dialogSelector = cssList('dialogs', ['div[role="dialog"]']).join(', ');
+  const dialog = page.locator(dialogSelector).last();
+  const postSelectors = cssList('postButtons', ['div[role="button"]']);
   const candidates = [
     dialog.getByRole('button', { name: POST_BUTTON_TEXT }),
-    page.getByRole('button', { name: POST_BUTTON_TEXT })
+    page.getByRole('button', { name: POST_BUTTON_TEXT }),
+    ...postSelectors.map(selector => dialog.locator(selector).filter({ hasText: POST_BUTTON_TEXT })),
+    ...postSelectors.map(selector => page.locator(selector).filter({ hasText: POST_BUTTON_TEXT }))
   ];
 
   for (const locator of candidates) {
@@ -265,6 +313,7 @@ async function submitPost(page) {
       await button.click({ timeout: 15000 });
       await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => undefined);
       await page.waitForTimeout(config.postSubmitWaitMs);
+      await verifyPostSubmitted(page, dialog);
       return;
     }
   }
@@ -272,9 +321,41 @@ async function submitPost(page) {
   throw new Error('Cannot find enabled Post/Dang button in composer.');
 }
 
-async function saveFailureArtifacts(page, groupId) {
+async function verifyPostSubmitted(page, dialog) {
+  const failure = page.getByText(SUBMIT_FAILURE_TEXT).first();
+  if (await failure.isVisible({ timeout: 3000 }).catch(() => false)) {
+    const message = await failure.innerText().catch(() => 'Facebook reported post submit failure');
+    throw new Error(`Facebook submit rejected: ${message}`);
+  }
+
+  const deadline = Date.now() + config.postSubmitVerifyMs;
+  while (Date.now() < deadline) {
+    if (!(await dialog.isVisible().catch(() => false))) {
+      return;
+    }
+
+    const enabledPostButtons = await dialog.getByRole('button', { name: POST_BUTTON_TEXT }).evaluateAll((buttons) => {
+      return buttons.filter((button) => {
+        const ariaDisabled = button.getAttribute('aria-disabled');
+        const disabled = button.hasAttribute('disabled');
+        const rect = button.getBoundingClientRect();
+        return ariaDisabled !== 'true' && !disabled && rect.width > 0 && rect.height > 0;
+      }).length;
+    }).catch(() => 0);
+
+    if (enabledPostButtons === 0) {
+      return;
+    }
+
+    await page.waitForTimeout(1000);
+  }
+
+  throw new Error('Facebook submit could not be verified: composer stayed open with an enabled Post button.');
+}
+
+async function saveFailureArtifacts(page, groupId, step = 'failure') {
   ensureRuntimeDirs();
-  const prefix = `facebook-group-post-${safeName(groupId)}`;
+  const prefix = `facebook-group-post-${safeName(groupId)}-${safeName(step)}`;
   const screenshotPath = artifactPath(prefix, 'png');
   const htmlPath = artifactPath(prefix, 'html');
   await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
@@ -283,6 +364,25 @@ async function saveFailureArtifacts(page, groupId) {
     fs.writeFileSync(htmlPath, html, 'utf8');
   }
   return { screenshotPath, htmlPath };
+}
+
+async function retryStep(name, page, groupId, action) {
+  let lastError;
+  for (let attempt = 1; attempt <= STEP_ATTEMPTS; attempt++) {
+    try {
+      console.log(`[facebookGroupPost] step=${name} attempt=${attempt}/${STEP_ATTEMPTS}`);
+      return await action(attempt);
+    } catch (error) {
+      lastError = error;
+      console.warn(`[facebookGroupPost] step=${name} attempt=${attempt}/${STEP_ATTEMPTS} failed: ${error.message}`);
+      if (attempt < STEP_ATTEMPTS) {
+        await page.waitForTimeout(STEP_DELAY_MS).catch(() => undefined);
+      }
+    }
+  }
+
+  const artifacts = await saveFailureArtifacts(page, groupId, name).catch(() => ({}));
+  throw new Error(`${name} failed after ${STEP_ATTEMPTS} attempts: ${lastError?.message || 'unknown error'}${artifacts.screenshotPath ? ` | screenshot=${artifacts.screenshotPath}` : ''}`);
 }
 
 async function postToFacebookGroup(args) {
@@ -296,6 +396,17 @@ async function postToFacebookGroup(args) {
   }
 
   const groupUrl = normalizeGroupUrl(args.groupReference);
+  if (args.dryRun === true || args.dryRun === 'true') {
+    return {
+      success: true,
+      dryRun: true,
+      message: 'Facebook group post dry run accepted',
+      contentLength: String(args.content).trim().length,
+      groupUrl
+    };
+  }
+
+  const groupKey = args.groupId || args.groupReference;
   const browser = await chromium.launch({
     headless: config.headless,
     slowMo: config.slowMoMs,
@@ -311,21 +422,28 @@ async function postToFacebookGroup(args) {
   page.setDefaultTimeout(config.timeoutMs);
 
   try {
-    await assertLoggedIn(page);
-    await page.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: config.timeoutMs });
-    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => undefined);
-    await openComposer(page);
-    await fillComposer(page, String(args.content).trim());
-    await submitPost(page);
+    await retryStep('assertLoggedIn', page, groupKey, () => assertLoggedIn(page));
+    await retryStep('openGroup', page, groupKey, async () => {
+      await page.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: config.timeoutMs });
+      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => undefined);
+    });
+    await retryStep('openComposer', page, groupKey, () => openComposer(page));
+    await retryStep('fillComposer', page, groupKey, () => fillComposer(page, String(args.content).trim()));
+    await retryStep('submitPost', page, groupKey, () => submitPost(page));
+    const successArtifacts = config.successSnapshotEnabled
+      ? await saveFailureArtifacts(page, groupKey, 'success').catch(() => ({}))
+      : {};
 
     return {
       success: true,
       message: 'Facebook group post submitted',
       postUrl: page.url(),
-      groupUrl
+      groupUrl,
+      successScreenshotPath: successArtifacts.screenshotPath,
+      successHtmlPath: successArtifacts.htmlPath
     };
   } catch (error) {
-    const artifacts = await saveFailureArtifacts(page, args.groupId || args.groupReference).catch(() => ({}));
+    const artifacts = await saveFailureArtifacts(page, groupKey, 'final').catch(() => ({}));
     throw new Error(`${error.message}${artifacts.screenshotPath ? ` | screenshot=${artifacts.screenshotPath}` : ''}`);
   } finally {
     await context.close().catch(() => undefined);

@@ -85,6 +85,7 @@ function handleHealth(req, res) {
     tool: 'facebookGroupPost',
     sessionExists: sessionExists(),
     storageStatePath: config.storageStatePath,
+    selectorsConfigPath: config.selectorsConfigPath,
     headless: config.headless
   });
 }

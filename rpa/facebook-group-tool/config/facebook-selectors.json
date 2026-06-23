@@ -1,0 +1,86 @@
+{
+  "textPatterns": {
+    "composer": [
+      "write something",
+      "what's on your mind",
+      "create post",
+      "create a public post",
+      "viet gi",
+      "ban viet gi",
+      "tao bai viet",
+      "ban dang nghi gi",
+      "viết gì",
+      "bạn viết gì",
+      "tạo bài viết",
+      "bạn đang nghĩ gì"
+    ],
+    "composerPlaceholder": [
+      "write something",
+      "what's on your mind",
+      "create a public post",
+      "viet gi",
+      "ban viet gi",
+      "tao bai viet",
+      "viết gì",
+      "bạn viết gì",
+      "tạo bài viết"
+    ],
+    "postButton": [
+      "post",
+      "publish",
+      "dang",
+      "đăng"
+    ],
+    "cookieButton": [
+      "allow all cookies",
+      "accept all",
+      "chap nhan tat ca",
+      "cho phep tat ca",
+      "chấp nhận tất cả",
+      "cho phép tất cả"
+    ],
+    "negativeEditorLabels": [
+      "comment",
+      "binh luan",
+      "bình luận"
+    ],
+    "submitFailure": [
+      "something went wrong",
+      "couldn't post",
+      "could not post",
+      "try again",
+      "we restrict certain activity",
+      "temporarily blocked",
+      "not allowed",
+      "đã xảy ra lỗi",
+      "không thể đăng",
+      "thử lại",
+      "bị chặn tạm thời",
+      "không được phép"
+    ]
+  },
+  "cssSelectors": {
+    "composerTriggers": [
+      "div[role=\"button\"][aria-label*=\"post\" i]",
+      "div[role=\"button\"][aria-label*=\"đăng\" i]",
+      "div[role=\"button\"][aria-label*=\"bài viết\" i]",
+      "div[role=\"button\"]"
+    ],
+    "editableTextboxes": [
+      "div[role=\"textbox\"][contenteditable=\"true\"][data-lexical-editor=\"true\"]",
+      "div[role=\"textbox\"][contenteditable=\"true\"]",
+      "[contenteditable=\"true\"][data-lexical-editor=\"true\"]",
+      "[contenteditable=\"true\"]"
+    ],
+    "postButtons": [
+      "div[role=\"button\"][aria-label=\"Post\"]",
+      "div[role=\"button\"][aria-label=\"Đăng\"]",
+      "div[role=\"button\"][aria-label=\"Dang\"]",
+      "div[role=\"button\"]"
+    ]
+  },
+  "retry": {
+    "stepAttempts": 3,
+    "stepDelayMs": 1200
+  }
+}

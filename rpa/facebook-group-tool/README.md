@@ -83,6 +83,19 @@ Can thay:
 }
 ```
 
+Selector cua Facebook UI duoc tach ra tai:
+
+```text
+config/facebook-selectors.json
+```
+
+Neu Facebook doi UI nhe, uu tien sua selector/text trong file nay roi restart RPA tool, khong can sua code.
+Co the override bang bien moi truong:
+
+```bash
+FACEBOOK_RPA_SELECTORS_CONFIG=/path/to/facebook-selectors.json npm run start
+```
+
 ## 5. Test post truc tiep
 
 Dung group test truoc, tranh dang that vao group production.
