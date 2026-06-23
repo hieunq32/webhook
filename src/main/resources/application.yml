@@ -49,8 +49,8 @@ facebook:
     delay-max-seconds: ${FACEBOOK_GROUP_POSTING_DELAY_MAX_SECONDS:90}
     max-posts-per-day-per-group: ${FACEBOOK_GROUP_POSTING_MAX_POSTS_PER_DAY_PER_GROUP:3}
     retry-count: ${FACEBOOK_GROUP_POSTING_RETRY_COUNT:2}
-    rpa-tools-invoke-url: ${FACEBOOK_GROUP_POSTING_RPA_TOOLS_INVOKE_URL:http://127.0.0.1:18990/tools/invoke}
-    rpa-auth-token: ${FACEBOOK_GROUP_POSTING_RPA_AUTH_TOKEN:}
+    rpa-tools-invoke-url: ${FACEBOOK_GROUP_POSTING_RPA_TOOLS_INVOKE_URL:}
+    rpa-auth-token: ${FACEBOOK_GROUP_POSTING_RPA_AUTH_TOKEN:${OPENCLAW_GATEWAY_TOKEN:}}
     rpa-connect-timeout-seconds: ${FACEBOOK_GROUP_POSTING_RPA_CONNECT_TIMEOUT_SECONDS:10}
     rpa-read-timeout-seconds: ${FACEBOOK_GROUP_POSTING_RPA_READ_TIMEOUT_SECONDS:180}
 
