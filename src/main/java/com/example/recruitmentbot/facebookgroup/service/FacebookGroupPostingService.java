@@ -192,6 +192,7 @@ public class FacebookGroupPostingService {
         String generatedContent;
         try {
             generatedContent = jobPostContentGenerator.generatePost(jobDescription);
+            generatedContent = appendCandidateFanpageCta(generatedContent, jobDescription);
         } catch (Exception exception) {
             log.error("Failed to generate Facebook group post content. jobId={}", jobDescriptionId, exception);
             return emptySummary(jobDescriptionId, jobDescription.getTitle(), false,
@@ -333,6 +334,42 @@ public class FacebookGroupPostingService {
                     .append('\n'));
         }
         return builder.toString().trim();
+    }
+
+    private String appendCandidateFanpageCta(String generatedContent, JobDescription jobDescription) {
+        if (!properties.candidateCtaEnabled() || !StringUtils.hasText(generatedContent)) {
+            return generatedContent;
+        }
+
+        String normalizedContent = normalizeText(generatedContent);
+        String normalizedFanpageName = normalizeText(properties.effectiveCandidateFanpageName());
+        String jobCode = buildJobCode(jobDescription.getId());
+        boolean alreadyHasFanpage = StringUtils.hasText(normalizedFanpageName)
+                && normalizedContent.contains(normalizedFanpageName);
+        boolean alreadyHasJobCode = normalizeText(generatedContent).contains(normalizeText(jobCode));
+        boolean alreadyWarnsAgainstHrInbox = normalizedContent.contains("khong inbox")
+                || normalizedContent.contains("khong nhan tin tai khoan ca nhan")
+                || normalizedContent.contains("khong lien he tai khoan ca nhan");
+        if (alreadyHasFanpage && alreadyHasJobCode && alreadyWarnsAgainstHrInbox) {
+            return generatedContent.trim();
+        }
+
+        String fanpageUrl = properties.effectiveCandidateFanpageUrl();
+        String fanpageUrlLine = StringUtils.hasText(fanpageUrl) ? " (" + fanpageUrl + ")" : "";
+        String cta = properties.effectiveCandidateCtaTemplate()
+                .replace("{{fanpageName}}", properties.effectiveCandidateFanpageName())
+                .replace("{{fanpageUrl}}", fanpageUrl == null ? "" : fanpageUrl)
+                .replace("{{fanpageUrlLine}}", fanpageUrlLine)
+                .replace("{{jobCode}}", jobCode)
+                .trim();
+
+        String jobCodeLine = "Ma JD: " + jobCode + "\n"
+                + "Khi nhan tin fanpage, hay gui dung ma JD nay de bot tu van dung vi tri.";
+        return generatedContent.trim() + "\n\n" + jobCodeLine + "\n" + cta;
+    }
+
+    private String buildJobCode(Long jobDescriptionId) {
+        return "JD-" + jobDescriptionId;
     }
 
     private FacebookGroupPostAttemptResponse postWithRetry(

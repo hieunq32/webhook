@@ -15,7 +15,11 @@ public record FacebookGroupPostingProperties(
         String rpaToolsInvokeUrl,
         String rpaAuthToken,
         int rpaConnectTimeoutSeconds,
-        int rpaReadTimeoutSeconds
+        int rpaReadTimeoutSeconds,
+        boolean candidateCtaEnabled,
+        String candidateFanpageName,
+        String candidateFanpageUrl,
+        String candidateCtaTemplate
 ) {
     public int effectiveDelayMinSeconds() {
         return Math.max(delayMinSeconds, 0);
@@ -49,5 +53,27 @@ public record FacebookGroupPostingProperties(
 
     public int effectiveRpaReadTimeoutSeconds() {
         return Math.max(rpaReadTimeoutSeconds, 30);
+    }
+
+    public String effectiveCandidateFanpageName() {
+        return candidateFanpageName == null || candidateFanpageName.isBlank()
+                ? "Test VCS"
+                : candidateFanpageName.trim();
+    }
+
+    public String effectiveCandidateFanpageUrl() {
+        return candidateFanpageUrl == null || candidateFanpageUrl.isBlank()
+                ? null
+                : candidateFanpageUrl.trim();
+    }
+
+    public String effectiveCandidateCtaTemplate() {
+        if (candidateCtaTemplate == null || candidateCtaTemplate.isBlank()) {
+            return """
+                    Để biết thông tin chi tiết và ứng tuyển, vui lòng nhắn tin trực tiếp fanpage {{fanpageName}}{{fanpageUrlLine}}.
+                    Vui lòng không inbox tài khoản cá nhân của HR để tránh bỏ sót thông tin ứng tuyển.
+                    """;
+        }
+        return candidateCtaTemplate.trim();
     }
 }

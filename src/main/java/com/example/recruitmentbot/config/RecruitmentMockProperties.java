@@ -23,6 +23,7 @@ public record RecruitmentMockProperties(
         String englishFallbackReply,
         Map<String, String> jdDriveLinks,
         String jdRootPath,
-        String jdPublicBaseUrl
+        String jdPublicBaseUrl,
+        String cvUploadUrl
 ) {
 }

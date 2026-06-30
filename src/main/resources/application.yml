@@ -28,6 +28,9 @@ logging:
     root: INFO
     com.example.recruitmentbot: INFO
 
+integration:
+  enabled: ${INTEGRATION_API_ENABLED:true}
+  api-key: ${INTEGRATION_API_KEY:}
 facebook:
   verify-token: your-facebook-verify-token
   page-access-token: your-facebook-page-access-token
@@ -47,12 +50,18 @@ facebook:
     open-claw-script-name: ${FACEBOOK_GROUP_POSTING_OPENCLAW_SCRIPT_NAME:facebookGroupPost}
     delay-min-seconds: ${FACEBOOK_GROUP_POSTING_DELAY_MIN_SECONDS:15}
     delay-max-seconds: ${FACEBOOK_GROUP_POSTING_DELAY_MAX_SECONDS:90}
-    max-posts-per-day-per-group: ${FACEBOOK_GROUP_POSTING_MAX_POSTS_PER_DAY_PER_GROUP:3}
+    max-posts-per-day-per-group: ${FACEBOOK_GROUP_POSTING_MAX_POSTS_PER_DAY_PER_GROUP:10}
     retry-count: ${FACEBOOK_GROUP_POSTING_RETRY_COUNT:2}
-    rpa-tools-invoke-url: ${FACEBOOK_GROUP_POSTING_RPA_TOOLS_INVOKE_URL:}
+    rpa-tools-invoke-url: ${FACEBOOK_GROUP_POSTING_RPA_TOOLS_INVOKE_URL:http://127.0.0.1:18990/tools/invoke}
     rpa-auth-token: ${FACEBOOK_GROUP_POSTING_RPA_AUTH_TOKEN:${OPENCLAW_GATEWAY_TOKEN:}}
     rpa-connect-timeout-seconds: ${FACEBOOK_GROUP_POSTING_RPA_CONNECT_TIMEOUT_SECONDS:10}
     rpa-read-timeout-seconds: ${FACEBOOK_GROUP_POSTING_RPA_READ_TIMEOUT_SECONDS:180}
+    candidate-cta-enabled: ${FACEBOOK_GROUP_POSTING_CANDIDATE_CTA_ENABLED:true}
+    candidate-fanpage-name: ${FACEBOOK_GROUP_POSTING_CANDIDATE_FANPAGE_NAME:Test VCS}
+    candidate-fanpage-url: ${FACEBOOK_GROUP_POSTING_CANDIDATE_FANPAGE_URL:}
+    candidate-cta-template: |
+      Để biết thông tin chi tiết và ứng tuyển, vui lòng nhắn tin trực tiếp fanpage {{fanpageName}}{{fanpageUrlLine}}.
+      Vui lòng không inbox tài khoản cá nhân của HR để tránh bỏ sót thông tin ứng tuyển.
 
 openai:
   mode: OLLAMA
@@ -254,6 +263,7 @@ mock:
       java-developer: "https://drive.google.com/drive/folders/1iOoqTCbb0Ff4e_oW8wdSE7CK5aL1ALWx"
       golang-developer: "https://drive.google.com/drive/folders/1RYb2YoBdYJoHHhAsRIrcYMi0Eiucphpq"
       fullstack: "https://drive.google.com/drive/folders/1xLKK7_KEJI7LcNbB0vAmKbwtvZJxUrPQ"
+    cv-upload-url: ${MOCK_RECRUITMENT_CV_UPLOAD_URL:https://drive.google.com/drive/folders/1_KRWitvu0FeLHd-KkNnLCZwD-vpA5oXG?usp=sharing}
 
 ---
 spring:

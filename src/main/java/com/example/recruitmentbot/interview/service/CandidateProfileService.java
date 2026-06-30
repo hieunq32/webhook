@@ -4,6 +4,7 @@ import com.example.recruitmentbot.interview.config.InterviewSchedulingProperties
 import com.example.recruitmentbot.interview.domain.CandidateProfile;
 import com.example.recruitmentbot.interview.dto.InterviewSchedulingStartRequest;
 import com.example.recruitmentbot.interview.repository.CandidateProfileRepository;
+import com.example.recruitmentbot.jobposting.domain.JobDescription;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -55,6 +56,13 @@ public class CandidateProfileService {
     public CandidateProfile ensureProfileExistsForMessengerSender(String senderId) {
         return candidateProfileRepository.findBySenderId(senderId)
                 .orElseGet(() -> candidateProfileRepository.save(buildPlaceholderProfile(senderId)));
+    }
+
+    public CandidateProfile assignJobFromMessengerSender(String senderId, JobDescription jobDescription) {
+        CandidateProfile profile = ensureProfileExistsForMessengerSender(senderId);
+        profile.setAppliedPosition(jobDescription.getTitle());
+        profile.setJobDescriptionId(jobDescription.getId());
+        return candidateProfileRepository.save(profile);
     }
 
     private CandidateProfile buildPlaceholderProfile(String senderId) {

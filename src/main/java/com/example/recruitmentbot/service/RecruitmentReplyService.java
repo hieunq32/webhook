@@ -3,6 +3,10 @@ package com.example.recruitmentbot.service;
 import com.example.recruitmentbot.config.OpenAiProperties;
 import com.example.recruitmentbot.config.OllamaProperties;
 import com.example.recruitmentbot.config.RecruitmentMockProperties;
+import com.example.recruitmentbot.interview.service.CandidateProfileService;
+import com.example.recruitmentbot.jobposting.domain.JobDescription;
+import com.example.recruitmentbot.jobposting.domain.JobStatus;
+import com.example.recruitmentbot.jobposting.repository.JobDescriptionRepository;
 import com.example.recruitmentbot.openclaw.service.OpenClawGatewayClient;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -26,6 +30,7 @@ import java.util.regex.Pattern;
 public class RecruitmentReplyService {
 
     private static final Logger log = LoggerFactory.getLogger(RecruitmentReplyService.class);
+    private static final Pattern JOB_CODE_PATTERN = Pattern.compile("\\bJD\\s*[-_]?\\s*(\\d+)\\b", Pattern.CASE_INSENSITIVE);
     private static final Pattern EXPERIENCE_PATTERN = Pattern.compile("(\\d{1,2})\\s*(nam|year|years|yr|yrs)");
     private static final Pattern VIETNAMESE_CHAR_PATTERN = Pattern.compile("[\\p{IsLatin}&&[^\u0000-\u007F]]");
     private static final int MIN_EXP_YEARS = 0;
@@ -49,6 +54,8 @@ public class RecruitmentReplyService {
     private final OpenClawGatewayClient openClawGatewayClient;
     private final OllamaProperties ollamaProperties;
     private final RecruitmentMockProperties mockProperties;
+    private final JobDescriptionRepository jobDescriptionRepository;
+    private final CandidateProfileService candidateProfileService;
     private final Map<String, CandidateProfile> candidateProfiles = new ConcurrentHashMap<>();
     private final Map<String, String> jdDriveLinkByRoleAlias = new ConcurrentHashMap<>();
     private final Map<String, String> jdByRoleAlias = new ConcurrentHashMap<>();
@@ -58,13 +65,17 @@ public class RecruitmentReplyService {
                                    OllamaService ollamaService,
                                    OpenClawGatewayClient openClawGatewayClient,
                                    OllamaProperties ollamaProperties,
-                                   RecruitmentMockProperties mockProperties) {
+                                   RecruitmentMockProperties mockProperties,
+                                   JobDescriptionRepository jobDescriptionRepository,
+                                   CandidateProfileService candidateProfileService) {
         this.openAiProperties = openAiProperties;
         this.openAiService = openAiService;
         this.ollamaService = ollamaService;
         this.openClawGatewayClient = openClawGatewayClient;
         this.ollamaProperties = ollamaProperties;
         this.mockProperties = mockProperties;
+        this.jobDescriptionRepository = jobDescriptionRepository;
+        this.candidateProfileService = candidateProfileService;
         initPositionIndex();
     }
 
@@ -74,6 +85,13 @@ public class RecruitmentReplyService {
         }
         String normalizedMessage = normalizeText(candidateMessage);
         boolean vietnamese = isVietnamese(candidateMessage);
+        if (isCvUploadQuestion(normalizedMessage)) {
+            return buildCvUploadReply(vietnamese);
+        }
+        Optional<JobDescription> jobFromCode = resolveJobFromCode(candidateMessage);
+        if (jobFromCode.isPresent()) {
+            return buildJobCodeReply(jobFromCode.get(), senderId, vietnamese);
+        }
         if (isLikelyGreeting(normalizedMessage)) {
             return buildGreetingReply(vietnamese);
         }
@@ -96,6 +114,56 @@ public class RecruitmentReplyService {
             }
         }
         return mockReply;
+    }
+
+    private Optional<JobDescription> resolveJobFromCode(String candidateMessage) {
+        if (!StringUtils.hasText(candidateMessage)) {
+            return Optional.empty();
+        }
+        Matcher matcher = JOB_CODE_PATTERN.matcher(candidateMessage);
+        if (!matcher.find()) {
+            return Optional.empty();
+        }
+        Long jobId = Long.parseLong(matcher.group(1));
+        return jobDescriptionRepository.findById(jobId)
+                .filter(job -> job.getStatus() == JobStatus.OPEN);
+    }
+
+    private RecruitmentReply buildJobCodeReply(JobDescription jobDescription, String senderId, boolean vietnamese) {
+        if (StringUtils.hasText(senderId)) {
+            CandidateProfile profile = candidateProfiles.computeIfAbsent(senderId, key -> new CandidateProfile());
+            profile.setRole(jobDescription.getTitle());
+            profile.setLocation(jobDescription.getLocation());
+            profile.setDocumentSent(false);
+            candidateProfileService.assignJobFromMessengerSender(senderId, jobDescription);
+        }
+
+        String reply = vietnamese
+                ? buildVietnameseJobCodeReply(jobDescription)
+                : buildEnglishJobCodeReply(jobDescription);
+        return new RecruitmentReply(reply, null);
+    }
+
+    private String buildVietnameseJobCodeReply(JobDescription jobDescription) {
+        return "Minh da nhan ma JD-" + jobDescription.getId() + ". Day la thong tin vi tri:\n"
+                + "Vi tri: " + jobDescription.getTitle() + "\n"
+                + "Mo ta: " + jobDescription.getDescription() + "\n"
+                + "Yeu cau: " + jobDescription.getRequirements() + "\n"
+                + "Luong/quyen loi: " + jobDescription.getSalary() + "\n"
+                + "Dia diem: " + jobDescription.getLocation() + "\n"
+                + "Hinh thuc: " + jobDescription.getWorkType() + "\n"
+                + "Ban co the gui so nam kinh nghiem va khu vuc mong muon de minh ho tro tiep.";
+    }
+
+    private String buildEnglishJobCodeReply(JobDescription jobDescription) {
+        return "I received JD-" + jobDescription.getId() + ". Here are the role details:\n"
+                + "Position: " + jobDescription.getTitle() + "\n"
+                + "Description: " + jobDescription.getDescription() + "\n"
+                + "Requirements: " + jobDescription.getRequirements() + "\n"
+                + "Salary/benefits: " + jobDescription.getSalary() + "\n"
+                + "Location: " + jobDescription.getLocation() + "\n"
+                + "Work type: " + jobDescription.getWorkType() + "\n"
+                + "Send your years of experience and preferred location so I can continue supporting you.";
     }
 
     private String buildOllamaPrompt(String candidateMessage, String senderId) {
@@ -292,6 +360,33 @@ public class RecruitmentReplyService {
                 + ". Here is the JD for your position: ";
         profile.setDocumentSent(true);
         return new RecruitmentReply(completionReply + docUrl, docUrl);
+    }
+
+    private RecruitmentReply buildCvUploadReply(boolean vietnamese) {
+        String uploadUrl = mockProperties.cvUploadUrl();
+        if (!StringUtils.hasText(uploadUrl)) {
+            return new RecruitmentReply(vietnamese
+                    ? "Hien tai he thong chua cau hinh link nop CV. Ban vui long cho minh biet vi tri ung tuyen de HR ho tro tiep."
+                    : "The CV upload link is not configured yet. Please share your target role so HR can support you.",
+                    null);
+        }
+        String reply = vietnamese
+                ? "Bạn vui lòng upload CV lên VCS Portal tại link này: " + uploadUrl.trim()
+                + "\nSau khi nộp CV, HR sẽ xem hồ sơ và liên hệ nếu bạn phù hợp."
+                : "Please upload your CV to the VCS Portal here: " + uploadUrl.trim()
+                + "\nAfter you submit your CV, HR will review it and contact you if there is a match.";
+        return new RecruitmentReply(reply, uploadUrl.trim());
+    }
+
+    private boolean isCvUploadQuestion(String normalizedMessage) {
+        if (!StringUtils.hasText(normalizedMessage)) {
+            return false;
+        }
+        boolean mentionsCv = containsAny(normalizedMessage, "cv", "resume", "ho so", "profile");
+        boolean asksSubmission = containsAny(normalizedMessage,
+                "nop", "gui", "upload", "tai len", "submit", "send", "apply",
+                "o dau", "qua dau", "cho ai", "cho admin", "truc tiep", "link");
+        return mentionsCv && asksSubmission;
     }
 
     private String detectRole(String normalizedMessage) {

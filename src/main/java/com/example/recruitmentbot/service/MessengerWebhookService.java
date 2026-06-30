@@ -132,7 +132,7 @@ public class MessengerWebhookService {
             }
 
             if (!StringUtils.hasText(messageText)) {
-                log.info("Ignoring non-text message from senderId={}", senderId);
+                handleNonTextMessage(senderId, messageNode);
                 return;
             }
 
@@ -178,6 +178,33 @@ public class MessengerWebhookService {
                 account.getPermissions()
         ));
         return adminAccount;
+    }
+
+    private void handleNonTextMessage(String senderId, JsonNode messageNode) {
+        if (hasImageAttachment(messageNode)) {
+            log.info("Received image attachment from senderId={}. Asking candidate for JD code.", senderId);
+            facebookMessengerService.sendTextMessage(senderId,
+                    "Minh da nhan anh ban gui. Hien tai bot chua scan noi dung trong anh.\n"
+                            + "De minh tu van dung vi tri, ban vui long gui ma JD tren bai dang, vi du: JD-6.\n"
+                            + "Neu khong thay ma JD, ban co the gui ten vi tri, vi du: Java Developer, Golang Developer.");
+            return;
+        }
+
+        log.info("Ignoring unsupported non-text message from senderId={}", senderId);
+    }
+
+    private boolean hasImageAttachment(JsonNode messageNode) {
+        JsonNode attachments = messageNode.path("attachments");
+        if (!attachments.isArray()) {
+            return false;
+        }
+
+        for (JsonNode attachment : attachments) {
+            if ("image".equalsIgnoreCase(attachment.path("type").asText())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void handleCandidateConversation(String senderId, String messageText) {
@@ -467,11 +494,46 @@ public class MessengerWebhookService {
                 || matchesIntent(normalized, "post group")
                 || matchesIntent(normalized, "dang nhom")
                 || matchesIntent(normalized, "post nhom")
+                || matchesIntent(normalized, "dang trong group")
+                || matchesIntent(normalized, "dang trong nhom")
+                || matchesIntent(normalized, "dang len group")
+                || matchesIntent(normalized, "dang len nhom")
+                || matchesIntent(normalized, "dang vao group")
+                || matchesIntent(normalized, "dang vao nhom")
+                || matchesIntent(normalized, "dang bai trong group")
+                || matchesIntent(normalized, "dang bai trong nhom")
+                || matchesIntent(normalized, "dang bai len group")
+                || matchesIntent(normalized, "dang bai len nhom")
+                || matchesIntent(normalized, "dang bai vao group")
+                || matchesIntent(normalized, "dang bai vao nhom")
+                || matchesIntent(normalized, "dang tin trong group")
+                || matchesIntent(normalized, "dang tin trong nhom")
+                || matchesIntent(normalized, "dang tin len group")
+                || matchesIntent(normalized, "dang tin len nhom")
+                || matchesIntent(normalized, "dang trong facebook group")
+                || matchesIntent(normalized, "dang len facebook group")
+                || matchesIntent(normalized, "dang vao facebook group")
+                || matchesIntent(normalized, "post trong group")
+                || matchesIntent(normalized, "post trong nhom")
+                || matchesIntent(normalized, "post len group")
+                || matchesIntent(normalized, "post len nhom")
                 || matchesIntent(normalized, "dang facebook group")
                 || compact.contains("danggroup")
                 || compact.contains("postgroup")
                 || compact.contains("dangnhom")
                 || compact.contains("postnhom")
+                || compact.contains("dangtronggroup")
+                || compact.contains("dangtrongnhom")
+                || compact.contains("danglengroup")
+                || compact.contains("danglennhom")
+                || compact.contains("dangvaogroup")
+                || compact.contains("dangvaonhom")
+                || compact.contains("dangbaitronggroup")
+                || compact.contains("dangbaitrongnhom")
+                || compact.contains("dangbailengroup")
+                || compact.contains("dangbailennhom")
+                || compact.contains("dangbaivaogroup")
+                || compact.contains("dangbaivaonhom")
                 || compact.contains("nggroup")
                 || compact.contains("ngnhom");
     }
@@ -806,30 +868,30 @@ public class MessengerWebhookService {
         menu.append("Menu HR - Xin chào ").append(displayName).append(":\n");
 
         if (pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.AUTO_POST_JOB)) {
-            menu.append("1. Dang bai tu dong\n");
+            menu.append("1. Đăng bài tự động\n");
             optionCount++;
         }
         if (pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.EDIT_JOB_POST)) {
-            menu.append("2. Sua bai dang\n");
+            menu.append("2. Sửa bài đăng\n");
             optionCount++;
         }
         if (pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.VIEW_HR_SCHEDULE)) {
-            menu.append("3. Xem lich\n");
+            menu.append("3. Xem lịch\n");
             optionCount++;
         }
         if (pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.VIEW_COUNCIL_REQUESTS)) {
-            menu.append("4. Request tu Hoi dong\n");
+            menu.append("4. Request từ Hội đồng\n");
             optionCount++;
         }
         if (pageAdminAccountService.hasPermission(adminAccount, PageAdminPermission.AUTO_POST_JOB)) {
-            menu.append("5. Dang bai len Facebook Group\n");
+            menu.append("5. Đăng bài lên Facebook Group\n");
             optionCount++;
         }
 
         if (optionCount == 0) {
             menu.append("Tai khoan admin nay chua duoc cap quyen trong database.");
         } else {
-            menu.append("Nhap 1/2/3/4/5 hoac go ten chuc nang.");
+            menu.append("Nhập 1/2/3/4/5 hoặc gõ tên chức năng.");
         }
 
         facebookMessengerService.sendTextMessage(senderId, menu.toString());
@@ -842,11 +904,11 @@ public class MessengerWebhookService {
         }
         String displayName = StringUtils.hasText(councilAccount.getDisplayName())
                 ? councilAccount.getDisplayName()
-                : "Hoi dong";
-        menu.append("Menu Hoi dong - Xin chao ").append(displayName).append(":\n")
-                .append("1. Xem lich\n")
-                .append("2. Tuyen thanh vien\n")
-                .append("Nhap 1/2 hoac go ten chuc nang.");
+                : "ội đồng";
+        menu.append("Menu Hội đồng - Xin chao ").append(displayName).append(":\n")
+                .append("1. Xem lịch\n")
+                .append("2. Tuyển thành viên\n")
+                .append("Nhập 1/2 hoặc gõ tên chức năng.");
         facebookMessengerService.sendTextMessage(senderId, menu.toString());
     }
 
@@ -1112,7 +1174,10 @@ public class MessengerWebhookService {
 
     private String normalizeText(String input) {
         String normalized = Normalizer.normalize(input == null ? "" : input, Normalizer.Form.NFD);
-        normalized = normalized.replaceAll("\\p{M}", "").toLowerCase();
+        normalized = normalized.replaceAll("\\p{M}", "")
+                .replace('đ', 'd')
+                .replace('Đ', 'D')
+                .toLowerCase();
         normalized = normalized.replaceAll("[^a-z0-9\\s]", " ");
         return normalized.replaceAll("\\s+", " ").trim();
     }
